@@ -12,6 +12,7 @@
 #include <Platform/RepRap.h>
 #include <Math/Isqrt.h>
 #include "Kinematics/LinearDeltaKinematics.h"
+#include "Endstops/ZProbe.h"
 
 #if !MS_USE_FPU
 
@@ -902,8 +903,36 @@ static inline uint32_t LimISqrt64(int64_t num) noexcept
 bool DriveMovement::CalcNextStepTimeFull(const DDA &dda) noexcept
 pre(nextStep <= totalSteps; stepsTillRecalc == 0)
 {
-	uint32_t shiftFactor = 0;									// assume single stepping
+	uint32_t shiftFactor = 0;
+//	uint32_t NewReading;
+//	float NewSpeedFactor;
+//
+//	const auto zp2 = reprap.GetPlatform().GetEndstops().GetZProbe(0);
+//
+//	if (zp2.IsNotNull())
+//	{
+//		NewReading = uint32_t(zp2->GetReading());
+//		NewReading = max<uint32_t>(NewReading,100);
+//		NewReading = min<uint32_t>(NewReading,1024);
+//	}
+//	else
+//	{
+//		NewReading = 1024;
+//	}
 
+//	if (NewSpeedFactor > (UsedSpeedFactor + 2))
+//    {
+//		UsedSpeedFactor += 1;
+//	}
+//	else if (NewSpeedFactor < (UsedSpeedFactor - 2))
+//    {
+//		UsedSpeedFactor -= 1;
+//	}
+//	else
+//	{
+//		UsedSpeedFactor = NewSpeedFactor;
+//	}
+//		NewSpeedFactor = 1024/NewReading;
 	{
 		uint32_t stepsToLimit = segmentStepLimit - nextStep;
 		// If there are no more steps left in this segment, skip to the next segment and use single stepping
@@ -973,7 +1002,7 @@ pre(nextStep <= totalSteps; stepsTillRecalc == 0)
 	{
 	case DMState::cartLinear:									// linear steady speed
 #if MS_USE_FPU
-		nextCalcStepTime = pB + (float)(nextStep + stepsTillRecalc) * pC;
+		nextCalcStepTime = pB + (float)(nextStep + stepsTillRecalc) * pC;// * NewSpeedFactor;
 #else
 		iNextCalcStepTime = iB + (nextStep + stepsTillRecalc) * iC;	//TODO ??scaling factor for iC ?
 #endif

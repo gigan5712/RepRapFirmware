@@ -667,4 +667,8 @@ void PwmPort::WriteAnalog(float pwm) const noexcept
 	}
 }
 
+void PwmPort::SetFrequency(PwmFrequency freq) noexcept
+{
+	frequency = freq;
+}
 // End

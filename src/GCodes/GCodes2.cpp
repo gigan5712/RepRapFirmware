@@ -200,6 +200,20 @@ bool GCodes::HandleGcode(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeEx
 			result = DoDwell(gb);
 			break;
 
+		case 8: // Start speed controlled extruder
+			ExtruderSpeedCtrl *ExtrSpeedCtrl;
+			ExtrSpeedCtrl = new ExtruderSpeedCtrl();
+
+			reply.printf("Started extruder 0");
+
+			ExtrSpeedCtrl->Configure();
+
+			platform.EnableDrivers(ExtruderToLogicalDrive(0), true);
+
+			ExtrSpeedCtrl->InitStepTime();
+			ExtrSpeedCtrl->Start();
+			break;
+
 		case 10: // Set/report offsets and temperatures, or retract
 			{
 #if SUPPORT_WORKPLACE_COORDINATES

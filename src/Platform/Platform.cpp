@@ -44,6 +44,7 @@
 #include <Hardware/NonVolatileMemory.h>
 #include <Storage/CRC32.h>
 #include <Accelerometers/Accelerometers.h>
+#include <Movement/ExtruderSpeedCtrl/ExtruderSpeedCtrl.h>
 
 #if SAM4E || SAM4S || SAME70
 # include <AnalogIn.h>
@@ -834,7 +835,7 @@ void Platform::Init() noexcept
 	numV12UnderVoltageEvents = previousV12UnderVoltageEvents = 0;
 #endif
 
-	// Kick everything off
+   // Kick everything off
 	InitialiseInterrupts();
 
 #ifdef DUET_NG
@@ -5281,6 +5282,12 @@ void Platform::Tick() noexcept
 		tickState = 1;
 		break;
 	}
+
+	// test GG
+	GetGpOutPort(4).SetPwmFrequency(currentZProbe.GetReading()); // Set Frequency
+	GetGpOutPort(4).WriteAnalog(0.1);
+	GetGpOutPort(5).WriteAnalog((GetGpInPort(2).GetState() == true) ? 100 : 0);
+
 
 #if SAME70
 	// On Duet 3, AFEC1 is used only for thermistors and associated Vref/Vssa monitoring. AFEC0 is used for everything else.

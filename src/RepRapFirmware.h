@@ -102,7 +102,8 @@ enum class PinUsedBy : uint8_t
 	filamentMonitor,
 	temporaryInput,
 	sensor,
-	sdCard
+	sdCard,
+	ExtrSpeedCtrl
 };
 
 #include <Config/Pins.h>
@@ -265,7 +266,8 @@ enum Module : uint8_t
 	moduleDisplay = 15,
 	moduleSbcInterface = 16,
 	moduleCan = 17,
-	numModules = 18,				// make this one greater than the last real module number
+	moduleSpeedExtr = 18,
+	numModules = 19,				// make this one greater than the last real module number
 	noModule = numModules
 };
 

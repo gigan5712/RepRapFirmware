@@ -102,7 +102,7 @@ private:
 	uint32_t reverseStartStep;							// the step number for which we need to reverse direction due to pressure advance or delta movement
 	uint32_t nextStepTime;								// how many clocks after the start of this move the next step is due
 	uint32_t stepInterval;								// how many clocks between steps
-
+	uint32_t UsedSpeedFactor;
 #if MS_USE_FPU
 	float distanceSoFar;
 	float timeSoFar;

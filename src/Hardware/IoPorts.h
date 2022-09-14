@@ -104,7 +104,7 @@ public:
 
 	void AppendFullDetails(const StringRef& str) const noexcept;
 	void AppendFrequency(const StringRef& str) const noexcept;		// append the frequency if the port is valid
-	void SetFrequency(PwmFrequency freq) noexcept { frequency = freq; }
+	void SetFrequency(PwmFrequency freq) noexcept;
 	PwmFrequency GetFrequency() const noexcept { return frequency; }
 	void WriteAnalog(float pwm) const noexcept;
 

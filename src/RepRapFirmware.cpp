@@ -208,6 +208,7 @@ static const char *_ecv_array const moduleName[] =
 	"Display",
 	"SbcInterface",
 	"CAN",
+	"SpeedExtr",
 	"none"
 };
 

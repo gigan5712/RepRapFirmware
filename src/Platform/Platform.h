@@ -42,6 +42,7 @@ Licence: GPL
 #include <Comms/PanelDueUpdater.h>
 #include <General/IPAddress.h>
 #include <General/function_ref.h>
+#include <Movement/ExtruderSpeedCtrl/ExtruderSpeedCtrl.h>
 
 #if defined(DUET_NG)
 # include "DueXn.h"
@@ -680,6 +681,9 @@ public:
 	void OnProcessingCanMessage() noexcept;								// called when we start processing any CAN message except for regular messages e.g. time sync
 #endif
 
+	// GG
+ 	//ExtruderSpeedCtrl ExtrSpeedCtrl;
+
 protected:
 	DECLARE_OBJECT_MODEL
 	OBJECT_MODEL_ARRAY(axisDrivers)
@@ -936,6 +940,8 @@ private:
 
 	// Misc
 	static bool deliberateError;						// true if we deliberately caused an exception for testing purposes. Must be static in case of exception during startup.
+
+	bool StepState;
 };
 
 #if HAS_MASS_STORAGE || HAS_SBC_INTERFACE || HAS_EMBEDDED_FILES

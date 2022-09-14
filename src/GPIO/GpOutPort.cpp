@@ -232,6 +232,14 @@ void GpOutputPort::WriteAnalog(float pwm) noexcept
 	}
 }
 
+void GpOutputPort::SetPwmFrequency(PwmFrequency newFreq) noexcept
+{
+	if (abs(newFreq - port.GetFrequency()) > 2 ){
+		port.SetFrequency(newFreq);
+	}
+
+}
+
 #endif
 
 #ifdef PCCB
