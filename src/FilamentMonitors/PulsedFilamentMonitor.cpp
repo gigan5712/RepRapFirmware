@@ -11,10 +11,6 @@
 #include <Platform/RepRap.h>
 #include <Movement/Move.h>
 
-#if SUPPORT_REMOTE_COMMANDS
-# include <CanMessageGenericParser.h>
-#endif
-
 // Unless we set the option to compare filament on all type of move, we reject readings if the last retract or reprime move wasn't completed
 // well before the start bit was received. This is because those moves have high accelerations and decelerations, so the measurement delay
 // is more likely to cause errors. This constant sets the delay required after a retract or reprime move before we accept the measurement.
@@ -34,17 +30,17 @@ constexpr ObjectModelTableEntry PulsedFilamentMonitor::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
 	// 0. PulsedFilamentMonitor members
-	{ "calibrated", 	OBJECT_MODEL_FUNC_IF(self->IsLocal() && self->DataReceived() && self->HaveCalibrationData(), self, 1), 	ObjectModelEntryFlags::live },
+	{ "calibrated", 	OBJECT_MODEL_FUNC_IF(self->IsLocal() && self->DataReceived() && self->HaveCalibrationData(), self, 1), 	ObjectModelEntryFlags::none },
 	{ "configured", 	OBJECT_MODEL_FUNC(self, 2), 																			ObjectModelEntryFlags::none },
 	{ "enabled",		OBJECT_MODEL_FUNC(self->comparisonEnabled),		 														ObjectModelEntryFlags::none },
 	{ "status",			OBJECT_MODEL_FUNC(self->GetStatusText()),																ObjectModelEntryFlags::live },
 	{ "type",			OBJECT_MODEL_FUNC_NOSELF("pulsed"), 																	ObjectModelEntryFlags::none },
 
 	// 1. PulsedFilamentMonitor.calibrated members
-	{ "mmPerPulse",		OBJECT_MODEL_FUNC(self->MeasuredSensitivity(), 3), 														ObjectModelEntryFlags::live },
-	{ "percentMax",		OBJECT_MODEL_FUNC(ConvertToPercent(self->maxMovementRatio)), 											ObjectModelEntryFlags::live },
-	{ "percentMin",		OBJECT_MODEL_FUNC(ConvertToPercent(self->minMovementRatio)), 											ObjectModelEntryFlags::live },
-	{ "totalDistance",	OBJECT_MODEL_FUNC(self->totalExtrusionCommanded, 1), 													ObjectModelEntryFlags::live },
+	{ "mmPerPulse",		OBJECT_MODEL_FUNC(self->MeasuredSensitivity(), 3), 														ObjectModelEntryFlags::none },
+	{ "percentMax",		OBJECT_MODEL_FUNC(ConvertToPercent(self->maxMovementRatio)), 											ObjectModelEntryFlags::none },
+	{ "percentMin",		OBJECT_MODEL_FUNC(ConvertToPercent(self->minMovementRatio)), 											ObjectModelEntryFlags::none },
+	{ "totalDistance",	OBJECT_MODEL_FUNC(self->totalExtrusionCommanded, 1), 													ObjectModelEntryFlags::none },
 
 	// 2. PulsedFilamentMonitor.configured members
 	{ "mmPerPulse",		OBJECT_MODEL_FUNC(self->mmPerPulse, 3), 																ObjectModelEntryFlags::none },
@@ -59,8 +55,8 @@ DEFINE_GET_OBJECT_MODEL_TABLE(PulsedFilamentMonitor)
 
 #endif
 
-PulsedFilamentMonitor::PulsedFilamentMonitor(unsigned int drv, unsigned int monitorType, DriverId did) noexcept
-	: FilamentMonitor(drv, monitorType, did),
+PulsedFilamentMonitor::PulsedFilamentMonitor(unsigned int extruder, unsigned int monitorType) noexcept
+	: FilamentMonitor(extruder, monitorType),
 	  mmPerPulse(DefaultMmPerPulse),
 	  minMovementAllowed(DefaultMinMovementAllowed), maxMovementAllowed(DefaultMaxMovementAllowed),
 	  minimumExtrusionCheckLength(DefaultMinimumExtrusionCheckLength), comparisonEnabled(false)
@@ -104,7 +100,7 @@ float PulsedFilamentMonitor::MeasuredSensitivity() const noexcept
 GCodeResult PulsedFilamentMonitor::Configure(GCodeBuffer& gb, const StringRef& reply, bool& seen) THROWS(GCodeException)
 {
 	const GCodeResult rslt = CommonConfigure(gb, reply, InterruptMode::rising, seen);
-	if (Succeeded(rslt))
+	if (rslt <= GCodeResult::warning)
 	{
 		gb.TryGetFValue('L', mmPerPulse, seen);
 		gb.TryGetFValue('E', minimumExtrusionCheckLength, seen);
@@ -330,83 +326,5 @@ void PulsedFilamentMonitor::Diagnostics(MessageType mtype, unsigned int extruder
 	const char* const statusText = (samplesReceived < 2) ? "no data received" : "ok";
 	reprap.GetPlatform().MessageF(mtype, "Extruder %u sensor: %s\n", extruder, statusText);
 }
-
-#if SUPPORT_REMOTE_COMMANDS
-
-// Configure this sensor, returning true if error and setting 'seen' if we processed any configuration parameters
-GCodeResult PulsedFilamentMonitor::Configure(const CanMessageGenericParser& parser, const StringRef& reply) noexcept
-{
-	bool seen = false;
-	const GCodeResult rslt = CommonConfigure(parser, reply, InterruptMode::rising, seen);
-	if (rslt <= GCodeResult::warning)
-	{
-		if (parser.GetFloatParam('L', mmPerPulse))
-		{
-			seen = true;
-		}
-		if (parser.GetFloatParam('E', minimumExtrusionCheckLength))
-		{
-			seen = true;
-		}
-
-		uint16_t minMax[2];
-		size_t numValues = 2;
-		if (parser.GetUint16ArrayParam('R', numValues, minMax))
-		{
-			if (numValues > 0)
-			{
-				seen = true;
-				minMovementAllowed = (float)minMax[0] * 0.01;
-			}
-			if (numValues > 1)
-			{
-				maxMovementAllowed = (float)minMax[1] * 0.01;
-			}
-		}
-
-		uint16_t temp;
-		if (parser.GetUintParam('S', temp))
-		{
-			seen = true;
-			comparisonEnabled = (temp > 0);
-		}
-
-		if (seen)
-		{
-			Init();
-		}
-		else
-		{
-			reply.copy("Pulse-type filament monitor on pin ");
-			GetPort().AppendPinName(reply);
-			reply.catf(", %s, sensitivity %.3fmm/pulse, allowed movement %ld%% to %ld%%, check every %.1fmm, ",
-						(comparisonEnabled) ? "enabled" : "disabled",
-						(double)mmPerPulse,
-						ConvertToPercent(minMovementAllowed),
-						ConvertToPercent(maxMovementAllowed),
-						(double)minimumExtrusionCheckLength);
-
-			if (!DataReceived())
-			{
-				reply.cat("no data received");
-			}
-			else if (HaveCalibrationData())
-			{
-				reply.catf("measured sensitivity %.3fmm/pulse, measured minimum %ld%%, maximum %ld%% over %.1fmm\n",
-					(double)MeasuredSensitivity(),
-					ConvertToPercent(minMovementRatio),
-					ConvertToPercent(maxMovementRatio),
-					(double)totalExtrusionCommanded);
-			}
-			else
-			{
-				reply.cat("no calibration data");
-			}
-		}
-	}
-	return rslt;
-}
-
-#endif
 
 // End

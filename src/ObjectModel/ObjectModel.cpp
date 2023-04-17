@@ -16,7 +16,6 @@
 #include <General/SafeStrtod.h>
 #include <General/IP4String.h>
 #include <Hardware/ExceptionHandlers.h>
-#include <Hardware/IoPorts.h>
 
 namespace StackUsage
 {
@@ -24,7 +23,7 @@ namespace StackUsage
 	constexpr uint32_t GetObjectValue_withTable = 48;
 }
 
-ExpressionValue::ExpressionValue(const MacAddress& mac) noexcept : type((uint32_t)TypeCode::MacAddress_tc), param(mac.HighWord()), uVal(mac.LowWord())
+ExpressionValue::ExpressionValue(const MacAddress& mac) noexcept : type((uint32_t)TypeCode::MacAddress), param(mac.HighWord()), uVal(mac.LowWord())
 {
 }
 
@@ -65,7 +64,7 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 		str.cat((bVal) ? "true" : "false");	// convert bool to string
 		break;
 
-	case TypeCode::IPAddress_tc:
+	case TypeCode::IPAddress:
 		str.cat(IP4String(uVal).c_str());
 		break;
 
@@ -73,7 +72,7 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 		str.cat("null");
 		break;
 
-	case TypeCode::DateTime_tc:
+	case TypeCode::DateTime:
 		{
 			const time_t time = Get56BitValue();
 			tm timeInfo;
@@ -83,15 +82,15 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 		}
 		break;
 
-	case TypeCode::DriverId_tc:
+	case TypeCode::DriverId:
 #if SUPPORT_CAN_EXPANSION
-		str.catf("%u.%u", (unsigned int)param, (unsigned int)uVal);
+		str.catf("%u.%u", (unsigned int)(uVal >> 8), (unsigned int)(uVal & 0xFF));
 #else
 		str.catf("%u", (unsigned int)uVal);
 #endif
 		break;
 
-	case TypeCode::MacAddress_tc:
+	case TypeCode::MacAddress:
 		str.catf("%02x:%02x:%02x:%02x:%02x:%02x",
 					(unsigned int)(uVal & 0xFF), (unsigned int)((uVal >> 8) & 0xFF), (unsigned int)((uVal >> 16) & 0xFF), (unsigned int)((uVal >> 24) & 0xFF),
 					(unsigned int)(param & 0xFF), (unsigned int)((param >> 8) & 0xFF));
@@ -104,7 +103,7 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 #endif
 
 	case TypeCode::Special:
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 		switch ((SpecialType)param)
 		{
 		case SpecialType::sysDir:
@@ -115,7 +114,7 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 		break;
 
 	// We don't fully handle the remaining types
-	case TypeCode::ObjectModel_tc:
+	case TypeCode::ObjectModel:
 		str.cat("{object}");
 		break;
 
@@ -131,14 +130,6 @@ void ExpressionValue::AppendAsString(const StringRef& str) const noexcept
 
 	case TypeCode::Enum32:
 		str.cat("(enumeration)");
-		break;
-
-	case TypeCode::Port:
-		iopVal->AppendPinName(str);
-		break;
-
-	case TypeCode::UniqueId_tc:
-		uniqueIdVal->AppendCharsToString(str);
 		break;
 	}
 }
@@ -193,34 +184,6 @@ void ExpressionValue::Release() noexcept
 	}
 }
 
-void ExpressionValue::SetBool(bool b) noexcept
-{
-	Release();
-	type = (uint32_t)TypeCode::Bool;
-	bVal = b;
-}
-
-void ExpressionValue::SetInt(int32_t i) noexcept
-{
-	Release();
-	type = (uint32_t)TypeCode::Int32;
-	iVal = i;
-}
-
-void ExpressionValue::SetFloat(float f, uint32_t digits) noexcept { Release(); type = (uint32_t)TypeCode::Float; fVal = f; param = digits; }
-
-void ExpressionValue::SetDriverId(DriverId did) noexcept
-{
-	Release();
-	type = (uint32_t)TypeCode::DriverId_tc;
-#if SUPPORT_CAN_EXPANSION
-	param = did.boardAddress;
-#else
-	param = 0;
-#endif
-	uVal = did.localDriver;
-}
-
 #if SUPPORT_CAN_EXPANSION
 
 // Given that this is a CanExpansionBoardDetails value, extract the part requested according to the parameter and append it to the string
@@ -230,42 +193,23 @@ void ExpressionValue::ExtractRequestedPart(const StringRef& rslt) const noexcept
 	// While updating firmware on expansion/tool boards we sometimes get a null board type string here, so allow for that
 	if (sVal != nullptr)
 	{
-		// Split the string into three field separate by vertical bar. These are board short name, firmware version, and firmware date.
-		const char * p = strchr(sVal, '|');
-		const size_t indexOfDivider1 = (p == nullptr) ? strlen(sVal) : p - sVal;
-		if (p != nullptr)
-		{
-			p = strchr(p + 1, '|');
-		}
-		const size_t indexOfDivider2 = (p == nullptr) ? strlen(sVal) : p - sVal;
+		const char *const p = strchr(sVal, '|');
+		const size_t indexOfDivider = (p == nullptr) ? strlen(sVal) : p - sVal;
 
 		switch((ExpansionDetail)param)
 		{
-		case ExpansionDetail::longName:
-			rslt.cat("Duet 3 Expansion ");
-			// no break
 		case ExpansionDetail::shortName:
-			rslt.catn(sVal, indexOfDivider1);
+			rslt.catn(sVal, indexOfDivider);
 			break;
 
 		case ExpansionDetail::firmwareVersion:
-			if (indexOfDivider2 > indexOfDivider1)
-			{
-				rslt.catn(sVal + indexOfDivider1 + 1, indexOfDivider2 - indexOfDivider1 - 1);
-			}
+			rslt.cat((p == nullptr) ? "unknown" : sVal + indexOfDivider + 1);
 			break;
 
 		case ExpansionDetail::firmwareFileName:
 			rslt.cat("Duet3Firmware_");
-			rslt.catn(sVal, indexOfDivider1);
+			rslt.catn(sVal, indexOfDivider);
 			rslt.cat(".bin");
-			break;
-
-		case ExpansionDetail::firmwareDate:
-			if (strlen(sVal) > indexOfDivider2)
-			{
-				rslt.cat(sVal + indexOfDivider2 + 1);
-			}
 			break;
 
 		default:
@@ -322,13 +266,10 @@ ObjectModel::ObjectModel() noexcept
 // ObjectExplorationContext members
 
 // Constructor used when reporting the OM as JSON
-ObjectExplorationContext::ObjectExplorationContext(const GCodeBuffer *_ecv_null gbp, bool wal, const char *reportFlags, unsigned int initialMaxDepth, size_t initialBufferOffset) noexcept
+ObjectExplorationContext::ObjectExplorationContext(bool wal, const char *reportFlags, unsigned int initialMaxDepth, size_t initialBufferOffset) noexcept
 	: startMillis(millis()), initialBufOffset(initialBufferOffset), maxDepth(initialMaxDepth), currentDepth(0), startElement(0), nextElement(-1), numIndicesProvided(0), numIndicesCounted(0),
-	  line(-1), column(-1), gb(gbp),
-	  shortForm(false), wantArrayLength(wal), wantExists(false),
-	  includeNonLive(true), includeImportant(false), includeNulls(false),
-	  excludeVerbose(true), excludeObsolete(true),
-	  obsoleteFieldQueried(false)
+	  line(-1), column(-1),
+	  shortForm(false), onlyLive(false), includeVerbose(false), wantArrayLength(wal), includeNulls(false), includeObsolete(false), obsoleteFieldQueried(false), wantExists(false)
 {
 	while (true)
 	{
@@ -337,22 +278,19 @@ ObjectExplorationContext::ObjectExplorationContext(const GCodeBuffer *_ecv_null 
 		case '\0':
 			return;
 		case 'v':
-			excludeVerbose = false;
+			includeVerbose = true;
 			break;
 		case 's':
 			shortForm = true;
 			break;
 		case 'f':
-			includeNonLive = false;
-			break;
-		case 'i':
-			includeImportant = true;
+			onlyLive = true;
 			break;
 		case 'n':
 			includeNulls = true;
 			break;
 		case 'o':
-			excludeObsolete = false;
+			includeObsolete = true;
 			break;
 		case 'd':
 			maxDepth = 0;
@@ -381,13 +319,10 @@ ObjectExplorationContext::ObjectExplorationContext(const GCodeBuffer *_ecv_null 
 }
 
 // Constructor when evaluating expressions
-ObjectExplorationContext::ObjectExplorationContext(const GCodeBuffer *_ecv_null gbp, bool wal, bool wex, int p_line, int p_col) noexcept
+ObjectExplorationContext::ObjectExplorationContext(bool wal, bool wex, int p_line, int p_col) noexcept
 	: startMillis(millis()), initialBufOffset(0), maxDepth(99), currentDepth(0), startElement(0), nextElement(-1), numIndicesProvided(0), numIndicesCounted(0),
-	  line(p_line), column(p_col), gb(gbp),
-	  shortForm(false), wantArrayLength(wal), wantExists(wex),
-	  includeNonLive(true), includeImportant(false), includeNulls(false),
-	  excludeVerbose(false), excludeObsolete(false),
-	  obsoleteFieldQueried(false)
+	  line(p_line), column(p_col),
+	  shortForm(false), onlyLive(false), includeVerbose(true), wantArrayLength(wal), includeNulls(false), includeObsolete(true), obsoleteFieldQueried(false), wantExists(wex)
 {
 }
 
@@ -411,12 +346,9 @@ int32_t ObjectExplorationContext::GetLastIndex() const THROWS(GCodeException)
 
 bool ObjectExplorationContext::ShouldReport(const ObjectModelEntryFlags f) const noexcept
 {
-	const bool wanted = includeNonLive
-					 || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::live) != 0
-					 || (includeImportant && ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::important) != 0);
-	return wanted
-		&& (!excludeVerbose  || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::verbose) == 0)
-		&& (!excludeObsolete || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::obsolete) == 0);
+	return (!onlyLive || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::live) != 0)
+		&& (includeVerbose || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::verbose) == 0)
+		&& (includeObsolete || ((uint8_t)f & (uint8_t)ObjectModelEntryFlags::obsolete) == 0);
 }
 
 GCodeException ObjectExplorationContext::ConstructParseException(const char *msg) const noexcept
@@ -432,8 +364,8 @@ GCodeException ObjectExplorationContext::ConstructParseException(const char *msg
 // Call this before making a recursive call, or before calling a function that needs a lot of stack from a recursive function
 void ObjectExplorationContext::CheckStack(uint32_t calledFunctionStackUsage) const THROWS(GCodeException)
 {
-	const char *_ecv_array stackPtr = (const char*_ecv_array)GetStackPointer();
-	const char *_ecv_array stackLimit = (const char*_ecv_array)TaskBase::GetCallerTaskHandle() + sizeof(TaskBase);
+	register const char * stackPtr asm ("sp");
+	const char *stackLimit = (const char*)TaskBase::GetCallerTaskHandle() + sizeof(TaskBase);
 	if (stackLimit + calledFunctionStackUsage + (StackUsage::Throw + StackUsage::Margin) < stackPtr)
 	{
 		return;
@@ -451,7 +383,7 @@ void ObjectExplorationContext::CheckStack(uint32_t calledFunctionStackUsage) con
 
 // Report this object
 void ObjectModel::ReportAsJson(OutputBuffer* buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor * null classDescriptor,
-								uint8_t tableNumber, const char *_ecv_array filter) const THROWS(GCodeException)
+								uint8_t tableNumber, const char* filter) const THROWS(GCodeException)
 {
 	if (context.IncreaseDepth())
 	{
@@ -513,10 +445,10 @@ void ObjectModel::ReportAsJson(OutputBuffer* buf, ObjectExplorationContext& cont
 }
 
 // Construct a JSON representation of those parts of the object model requested by the user. This version is called on the root of the tree.
-void ObjectModel::ReportAsJson(const GCodeBuffer *_ecv_null gb, OutputBuffer *buf, const char *_ecv_array filter, const char *_ecv_array reportFlags, bool wantArrayLength) const THROWS(GCodeException)
+void ObjectModel::ReportAsJson(OutputBuffer *buf, const char *filter, const char *reportFlags, bool wantArrayLength) const THROWS(GCodeException)
 {
 	const unsigned int defaultMaxDepth = (wantArrayLength) ? 99 : (filter[0] == 0) ? 1 : 99;
-	ObjectExplorationContext context(gb, wantArrayLength, reportFlags, defaultMaxDepth, buf->Length());
+	ObjectExplorationContext context(wantArrayLength, reportFlags, defaultMaxDepth, buf->Length());
 	ReportAsJson(buf, context, nullptr, 0, filter);
 	if (context.GetNextElement() >= 0)
 	{
@@ -529,13 +461,13 @@ void ObjectModel::ReportAsJson(const GCodeBuffer *_ecv_null gb, OutputBuffer *bu
 // Most recursive calls are for non-array object values, so handle object values inline to reduce stack usage.
 // This saves about 240 bytes of stack space but costs 272 bytes of flash memory.
 inline void ObjectModel::ReportItemAsJson(OutputBuffer *buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor *classDescriptor,
-											const ExpressionValue& val, const char *_ecv_array filter) const THROWS(GCodeException)
+											const ExpressionValue& val, const char *filter) const THROWS(GCodeException)
 {
 	if (context.WantArrayLength() && *filter == 0)
 	{
 		ReportArrayLengthAsJson(buf, context, val);
 	}
-	else if (val.GetType() == TypeCode::ObjectModel_tc)
+	else if (val.GetType() == TypeCode::ObjectModel)
 	{
 		if (  (*filter != '.' && *filter != 0)		// we should have reached the end of the filter or a '.', error if not
 			|| val.omVal == nullptr					// OM arrays may contain null entries, so we need to handle them here
@@ -591,7 +523,7 @@ void ObjectModel::ReportArrayLengthAsJson(OutputBuffer *buf, ObjectExplorationCo
 
 // Function to report a value or object as JSON
 // This function is recursive, so keep its stack usage low
-void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor *null classDescriptor,
+void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor *classDescriptor,
 										const ExpressionValue& val, const char *filter) const THROWS(GCodeException)
 {
 	switch (val.GetType())
@@ -684,14 +616,13 @@ void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationConte
 			{
 				const char *endptr;
 				const int32_t index = StrToI32(filter, &endptr);
-				const auto bm = Bitmap<uint32_t>::MakeFromRaw(val.uVal);
-				int bitNumber;
-				if (endptr == filter || *endptr != ']' || index < 0 || (bitNumber = bm.GetSetBitNumber(index)) < 0)
+				if (endptr == filter || *endptr != ']' || index < 0 || (size_t)index >= val.omadVal->GetNumElements(this, context))
 				{
 					buf->cat("null");				// avoid returning badly-formed JSON
 					break;							// invalid syntax, or index out of range
 				}
-				buf->catf("%d", bitNumber);
+				const auto bm = Bitmap<uint32_t>::MakeFromRaw(val.uVal);
+				buf->catf("%u", bm.GetSetBitNumber(index));
 				break;
 			}
 		}
@@ -717,14 +648,13 @@ void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationConte
 			{
 				const char *endptr;
 				const int32_t index = StrToI32(filter, &endptr);
-				const auto bm = Bitmap<uint64_t>::MakeFromRaw(val.uVal);
-				int bitNumber;
-				if (endptr == filter || *endptr != ']' || index < 0 || (bitNumber = bm.GetSetBitNumber(index)) < 0)
+				if (endptr == filter || *endptr != ']' || index < 0 || (size_t)index >= val.omadVal->GetNumElements(this, context))
 				{
 					buf->cat("null");				// avoid returning badly-formed JSON
 					break;							// invalid syntax, or index out of range
 				}
-				buf->catf("%d", bitNumber);
+				const auto bm = Bitmap<uint64_t>::MakeFromRaw(val.uVal);
+				buf->catf("%u", bm.GetSetBitNumber(index));
 				break;
 			}
 		}
@@ -760,7 +690,7 @@ void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationConte
 		buf->cat('"');
 		break;
 
-	case TypeCode::IPAddress_tc:
+	case TypeCode::IPAddress:
 		{
 			const IPAddress ipVal(val.uVal);
 			char sep = '"';
@@ -773,26 +703,26 @@ void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationConte
 		}
 		break;
 
-	case TypeCode::DateTime_tc:
+	case TypeCode::DateTime:
 		ReportDateTime(buf, val);
 		break;
 
-	case TypeCode::DriverId_tc:
+	case TypeCode::DriverId:
 #if SUPPORT_CAN_EXPANSION
-		buf->catf("\"%u.%u\"", (unsigned int)val.param, (unsigned int)val.uVal);
+		buf->catf("\"%u.%u\"", (unsigned int)(val.uVal >> 8), (unsigned int)(val.uVal & 0xFF));
 #else
 		buf->catf("\"%u\"", (unsigned int)val.uVal);
 #endif
 		break;
 
-	case TypeCode::MacAddress_tc:
+	case TypeCode::MacAddress:
 		buf->catf("\"%02x:%02x:%02x:%02x:%02x:%02x\"",
 					(unsigned int)(val.uVal & 0xFF), (unsigned int)((val.uVal >> 8) & 0xFF), (unsigned int)((val.uVal >> 16) & 0xFF), (unsigned int)((val.uVal >> 24) & 0xFF),
 					(unsigned int)(val.param & 0xFF), (unsigned int)((val.param >> 8) & 0xFF));
 		break;
 
 	case TypeCode::Special:
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 		switch ((ExpressionValue::SpecialType)val.param)
 		{
 		case ExpressionValue::SpecialType::sysDir:
@@ -806,34 +736,14 @@ void ObjectModel::ReportItemAsJsonFull(OutputBuffer *buf, ObjectExplorationConte
 		buf->cat("null");
 		break;
 
-	case TypeCode::Port:
-		ReportPinNameAsJson(buf, val);
-		break;
-
-	case TypeCode::UniqueId_tc:
-		buf->cat('"');
-		val.uniqueIdVal->AppendCharsToBuffer(buf);
-		buf->cat('"');
-		break;
-
-	case TypeCode::ObjectModel_tc:
-		break;											// we already handled this case in the inline part
+	case TypeCode::ObjectModel:
+		break;							// we already handled this case in the inline part
 	}
 }
 
-// This is a separate function to avoid having a string buffer on the stack of a recursive function
-void ObjectModel::ReportPinNameAsJson(OutputBuffer *buf, const ExpressionValue& val) noexcept
-{
-	buf->cat('"');
-	String<StringLength50> portName;
-	val.iopVal->AppendPinName(portName.GetRef());
-	buf->catf("%.0s", portName.c_str());				// the %.0s format specifier forces JSON escaping
-	buf->cat('"');
-}
-
 // Report an entire array as JSON
-void ObjectModel::ReportArrayAsJson(OutputBuffer *buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor *null classDescriptor,
-										const ObjectModelArrayDescriptor *omad, const char *_ecv_array filter) const THROWS(GCodeException)
+void ObjectModel::ReportArrayAsJson(OutputBuffer *buf, ObjectExplorationContext& context, const ObjectModelClassDescriptor *classDescriptor,
+										const ObjectModelArrayDescriptor *omad, const char *filter) const THROWS(GCodeException)
 {
 	const bool isRootArray = (buf->Length() == context.GetInitialBufferOffset());		// it's a root array if we haven't started writing to the buffer yet
 	ReadLocker lock(omad->lockPointer);
@@ -867,7 +777,7 @@ void ObjectModel::ReportArrayAsJson(OutputBuffer *buf, ObjectExplorationContext&
 }
 
 // Find the requested entry
-const ObjectModelTableEntry* ObjectModel::FindObjectModelTableEntry(const ObjectModelClassDescriptor *classDescriptor, uint8_t tableNumber, const char *_ecv_array idString) const noexcept
+const ObjectModelTableEntry* ObjectModel::FindObjectModelTableEntry(const ObjectModelClassDescriptor *classDescriptor, uint8_t tableNumber, const char* idString) const noexcept
 {
 	const uint8_t * const descriptor = classDescriptor->omd;
 	if (tableNumber >= descriptor[0])
@@ -926,9 +836,7 @@ bool ObjectModelTableEntry::ReportAsJson(OutputBuffer* buf, ObjectExplorationCon
 {
 	const char * nextElement = ObjectModel::GetNextElement(filter);
 	const ExpressionValue val = func(self, context);
-	// We include nulls if either the "include nulls" flag is set or the "include important" flag is set and the field is flagged important.
-	// The latter is so that field state.messageBox gets reported to PanelDue even if null when the "important" flag is set, so that PanelDue knows when a message has been cleared.
-	if (val.GetType() != TypeCode::None || context.ShouldIncludeNulls() || (context.ShouldIncludeImportant() && ((uint8_t)flags & (uint8_t)ObjectModelEntryFlags::important)))
+	if (val.GetType() != TypeCode::None || context.ShouldIncludeNulls())
 	{
 		if (*filter == 0)
 		{
@@ -962,7 +870,7 @@ int ObjectModelTableEntry::IdCompare(const char *id) const noexcept
 }
 
 // Get the value of an object
-ExpressionValue ObjectModel::GetObjectValueUsingTableNumber(ObjectExplorationContext& context, const ObjectModelClassDescriptor * null classDescriptor, const char *_ecv_array idString, uint8_t tableNumber) const THROWS(GCodeException)
+ExpressionValue ObjectModel::GetObjectValue(ObjectExplorationContext& context, const ObjectModelClassDescriptor * null classDescriptor, const char *idString, uint8_t tableNumber) const THROWS(GCodeException)
 decrease(strlen(idString))	// recursion variant
 {
 	if (classDescriptor == nullptr)
@@ -999,7 +907,7 @@ decrease(strlen(idString))	// recursion variant
 	throw context.ConstructParseException("unknown value '%s'", idString);
 }
 
-ExpressionValue ObjectModel::GetObjectValue(ObjectExplorationContext& context, const ObjectModelClassDescriptor *classDescriptor, const ExpressionValue& val, const char *_ecv_array idString) const THROWS(GCodeException)
+ExpressionValue ObjectModel::GetObjectValue(ObjectExplorationContext& context, const ObjectModelClassDescriptor *classDescriptor, const ExpressionValue& val, const char *idString) const THROWS(GCodeException)
 decrease(strlen(idString))	// recursion variant
 {
 	if (*idString == 0 && context.WantExists() && val.GetType() != TypeCode::None)
@@ -1042,14 +950,14 @@ decrease(strlen(idString))	// recursion variant
 			return GetObjectValue(context, classDescriptor, arrayElement, idString + 1);
 		}
 
-	case TypeCode::ObjectModel_tc:
+	case TypeCode::ObjectModel:
 		switch (*idString)
 		{
 		case 0:
 			return val;
 		case '.':
 			context.CheckStack(StackUsage::GetObjectValue_withTable);
-			return val.omVal->GetObjectValueUsingTableNumber(context, (val.omVal == this) ? classDescriptor : nullptr, idString + 1, val.param);
+			return val.omVal->GetObjectValue(context, (val.omVal == this) ? classDescriptor : nullptr, idString + 1, val.param);
 		case '^':
 			throw context.ConstructParseException("object is not an array");
 		default:
@@ -1070,40 +978,29 @@ decrease(strlen(idString))	// recursion variant
 
 	case TypeCode::Bitmap16:
 	case TypeCode::Bitmap32:
+		if (context.WantArrayLength())
 		{
-			const int numSetBits = Bitmap<uint32_t>::MakeFromRaw(val.uVal).CountSetBits();
-			if (context.WantArrayLength())
+			if (*idString != 0)
 			{
-				if (*idString != 0)
-				{
-					break;
-				}
-				return ExpressionValue((int32_t)numSetBits);
+				break;
 			}
-
-			if (*idString == '^')
-			{
-				++idString;
-				if (*idString != 0)
-				{
-					break;
-				}
-				context.AddIndex();
-				const bool inBounds = (context.GetLastIndex() >= 0 && context.GetLastIndex() < numSetBits);
-				if (context.WantExists())
-				{
-					return ExpressionValue(inBounds);
-				}
-
-				if (!inBounds)
-				{
-					throw context.ConstructParseException("array index out of bounds");
-				}
-
-				return ExpressionValue((int32_t)(Bitmap<uint32_t>::MakeFromRaw(val.uVal).GetSetBitNumber(context.GetLastIndex())));
-			}
+			const auto bm = Bitmap<uint32_t>::MakeFromRaw(val.uVal);
+			return ExpressionValue((int32_t)bm.CountSetBits());
 		}
-
+		if (*idString == '^')
+		{
+			++idString;
+			if (*idString != 0)
+			{
+				break;
+			}
+			if (context.WantExists())
+			{
+				return ExpressionValue(true);
+			}
+			const auto bm = Bitmap<uint32_t>::MakeFromRaw(val.uVal);
+			return ExpressionValue((int32_t)bm.GetSetBitNumber(context.GetLastIndex()));
+		}
 		if (*idString != 0)
 		{
 			break;
@@ -1115,40 +1012,29 @@ decrease(strlen(idString))	// recursion variant
 		return ExpressionValue((int32_t)val.uVal);
 
 	case TypeCode::Bitmap64:
+		if (context.WantArrayLength())
 		{
-			const int numSetBits = Bitmap<uint64_t>::MakeFromRaw(val.Get56BitValue()).CountSetBits();
-			if (context.WantArrayLength())
+			if (*idString != 0)
 			{
-				if (*idString != 0)
-				{
-					break;
-				}
-				return ExpressionValue((int32_t)numSetBits);
+				break;
 			}
-
-			if (*idString == '^')
-			{
-				++idString;
-				if (*idString != 0)
-				{
-					break;
-				}
-				context.AddIndex();
-				const bool inBounds = (context.GetLastIndex() >= 0 && context.GetLastIndex() < numSetBits);
-				if (context.WantExists())
-				{
-					return ExpressionValue(inBounds);
-				}
-
-				if (!inBounds)
-				{
-					throw context.ConstructParseException("array index out of bounds");
-				}
-
-				return ExpressionValue((int32_t)(Bitmap<uint64_t>::MakeFromRaw(val.Get56BitValue()).GetSetBitNumber(context.GetLastIndex())));
-			}
+			const auto bm = Bitmap<uint64_t>::MakeFromRaw(val.Get56BitValue());
+			return ExpressionValue((int32_t)bm.CountSetBits());
 		}
-
+		if (*idString == '^')
+		{
+			++idString;
+			if (*idString != 0)
+			{
+				break;
+			}
+			if (context.WantExists())
+			{
+				return ExpressionValue(true);
+			}
+			const auto bm = Bitmap<uint64_t>::MakeFromRaw(val.Get56BitValue());
+			return ExpressionValue((int32_t)bm.GetSetBitNumber(context.GetLastIndex()));
+		}
 		if (*idString != 0)
 		{
 			break;
@@ -1159,14 +1045,14 @@ decrease(strlen(idString))	// recursion variant
 		}
 		return ExpressionValue((int32_t)val.uVal);
 
-	case TypeCode::MacAddress_tc:
+	case TypeCode::MacAddress:
 		if (*idString == 0)
 		{
 			return (context.WantArrayLength()) ? ExpressionValue((int32_t)17) : val;
 		}
 		break;
 
-#if SUPPORT_CAN_EXPANSION
+#ifdef DUET3
 	case TypeCode::CanExpansionBoardDetails:
 		if (*idString == 0)
 		{

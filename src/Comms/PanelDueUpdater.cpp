@@ -7,7 +7,7 @@
 
 #include "PanelDueUpdater.h"
 
-#if SUPPORT_PANELDUE_FLASH
+#if HAS_AUX_DEVICES
 
 #include <Platform/Platform.h>
 #include <Platform/RepRap.h>
@@ -15,7 +15,7 @@
 class AuxSerialPort : public SerialPort
 {
 public:
-	AuxSerialPort(AsyncSerial& uartClass) noexcept : uart(uartClass), _timeout(0) {}
+	AuxSerialPort(UARTClass& uartClass) noexcept : uart(uartClass), _timeout(0) {}
 	~AuxSerialPort() {}
 
 	bool open(int baud = 115200,
@@ -35,9 +35,8 @@ public:
 	void flush() noexcept override { this->uart.flush(); }
 	void setDTR(bool dtr) noexcept override {}
 	void setRTS(bool rts) noexcept override {}
-
 private:
-	AsyncSerial& uart;
+	UARTClass& uart;
 	int _timeout;
 };
 
@@ -84,7 +83,7 @@ void DebugObserver::onStatus(const char *message, ...) noexcept
 	va_list ap;
 
 	va_start(ap, message);
-	reprap.GetPlatform().MessageV(GenericMessage, message, ap);
+	reprap.GetPlatform().MessageF(GenericMessage, message, ap);
 	va_end(ap);
 }
 
@@ -115,35 +114,22 @@ PanelDueUpdater::PanelDueUpdater() noexcept
 
 PanelDueUpdater::~PanelDueUpdater() noexcept
 {
-	DeleteObject(samba);
-	DeleteObject(serialPort);
-	DeleteObject(device);
-	DeleteObject(flasherObserver);
-	DeleteObject(flasher);
+	delete samba;
+	delete serialPort;
+	delete device;
+	delete flasherObserver;
+	delete flasher;
 }
 
 void PanelDueUpdater::Start(const StringRef& filenameRef, const uint32_t serialChan) noexcept
 {
-	if (state == FlashState::idle)
+	if (state != FlashState::idle)
 	{
-		serialChannel = serialChan;
-		const char * const filename = filenameRef.IsEmpty() ? PANEL_DUE_FIRMWARE_FILE : filenameRef.c_str();
-		firmwareFile = reprap.GetPlatform().OpenFile(FIRMWARE_DIRECTORY, filename, OpenMode::read);
-		if (firmwareFile == nullptr)
-		{
-			reprap.GetPlatform().MessageF(ErrorMessage, "Can't open file %s\n", filename);
-			state = FlashState::done;
-		}
-		else if (firmwareFile->Length() > 256 * 1024)
-		{
-			reprap.GetPlatform().MessageF(ErrorMessage, "Firmware file %s is too large\n", filename);
-			state = FlashState::done;
-		}
-		else
-		{
-			state = FlashState::eraseAndReset;
-		}
+		return;
 	}
+	serialChannel = serialChan;
+	firmwareFile = reprap.GetPlatform().OpenFile(FIRMWARE_DIRECTORY, filenameRef.IsEmpty() ? PANEL_DUE_FIRMWARE_FILE : filenameRef.c_str(), OpenMode::read);
+	state = FlashState::eraseAndReset;
 }
 
 void PanelDueUpdater::Spin() noexcept
@@ -159,7 +145,7 @@ void PanelDueUpdater::Spin() noexcept
 				// Since writing messages via AppendAuxReply is disabled while flashing we need to send it directly
 				auto auxPort = GetAuxPort();
 				auxPort->write('\n');			// Make sure the previous message is regarded as terminated by PanelDue
-				auxPort->print(panelDueCommandEraseAndReset);
+				auxPort->write(panelDueCommandEraseAndReset);
 				auxPort->flush();
 				state = FlashState::waitAfterEraseAndReset;
 				erasedAndResetAt = millis();
@@ -283,11 +269,20 @@ void PanelDueUpdater::Spin() noexcept
 				currentBaudRate = 0;
 
 				// Delete all objects we new'd
-				DeleteObject(samba);
-				DeleteObject(serialPort);
-				DeleteObject(device);
-				DeleteObject(flasherObserver);
-				DeleteObject(flasher);
+				delete samba;
+				samba = nullptr;
+
+				delete serialPort;
+				serialPort = nullptr;
+
+				delete device;
+				device = nullptr;
+
+				delete flasherObserver;
+				flasherObserver = nullptr;
+
+				delete flasher;
+				flasher = nullptr;
 
 				offset = 0;
 				erasedAndResetAt = 0;
@@ -321,19 +316,11 @@ void PanelDueUpdater::Spin() noexcept
 		{
 			reprap.GetPlatform().MessageF(ErrorMessage, "Flashing PanelDue failed in step %s. Please try again.", state.ToString());
 		}
-
-		// Delete all objects we new'd
-		DeleteObject(samba);
-		DeleteObject(serialPort);
-		DeleteObject(device);
-		DeleteObject(flasherObserver);
-		DeleteObject(flasher);
-
 		state = FlashState::done;
 	}
 }
 
-AsyncSerial* PanelDueUpdater::GetAuxPort() noexcept
+UARTClass* PanelDueUpdater::GetAuxPort() noexcept
 {
 	return
 			serialChannel == 0 || serialChannel > NumSerialChannels ? nullptr :

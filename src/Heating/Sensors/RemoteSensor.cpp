@@ -10,8 +10,7 @@
 #if SUPPORT_CAN_EXPANSION
 
 #include "CAN/CanMessageGenericConstructor.h"
-#include <CanMessageBuffer.h>
-#include <CanMessageGenericTables.h>
+#include "CanMessageBuffer.h"
 #include <General/Portability.h>
 
 constexpr uint32_t RemoteTemperatureTimeoutMillis = 1000;

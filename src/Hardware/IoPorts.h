@@ -22,7 +22,7 @@ public:
 
 	bool SetMode(PinAccess access) noexcept;
 	void Release() noexcept;
-	void AppendBasicDetails(const StringRef& str) const noexcept;
+	void AppendDetails(const StringRef& str) const noexcept;
 
 	static size_t AssignPorts(GCodeBuffer& gb, const StringRef& reply, PinUsedBy neededFor, size_t numPorts, IoPort * const ports[], const PinAccess access[]) THROWS(GCodeException);
 	bool AssignPort(GCodeBuffer& gb, const StringRef& reply, PinUsedBy neededFor, PinAccess access) THROWS(GCodeException);
@@ -35,7 +35,6 @@ public:
 	bool GetInvert() const noexcept;
 	void SetInvert(bool pInvert) noexcept;
 	void ToggleInvert(bool pInvert) noexcept;
-	bool IsHardwareInverted() const noexcept { return hardwareInvert; }
 
 	bool ReadDigital() const noexcept;
 	bool AttachInterrupt(StandardCallbackFunction callback, InterruptMode mode, CallbackParameter param) const noexcept;
@@ -45,7 +44,7 @@ public:
 #endif
 
 	uint16_t ReadAnalog() const noexcept;
-
+	uint16_t ReadAnalogNotInverted() const noexcept;
 	AnalogChannelNumber GetAnalogChannel() const noexcept { return PinToAdcChannel(GetPin()); }
 
 	void WriteDigital(bool high) const noexcept;
@@ -102,10 +101,8 @@ class PwmPort : public IoPort
 public:
 	PwmPort() noexcept;
 
-	void AppendFullDetails(const StringRef& str) const noexcept;
-	void AppendFrequency(const StringRef& str) const noexcept;		// append the frequency if the port is valid
-	void SetFrequency(PwmFrequency freq) noexcept;
-	PwmFrequency GetFrequency() const noexcept { return frequency; }
+	void AppendDetails(const StringRef& str) const noexcept;			// hides the one in IoPort
+	void SetFrequency(PwmFrequency freq) noexcept { frequency = freq; }
 	void WriteAnalog(float pwm) const noexcept;
 
 private:

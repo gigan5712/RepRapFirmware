@@ -9,6 +9,9 @@
 #define SRC_LOGGER_H_
 
 #include <RepRapFirmware.h>
+#include <General/NamedEnum.h>
+
+NamedEnum(LogLevel, uint8_t, off, warn, info, debug);
 
 #if HAS_MASS_STORAGE
 
@@ -17,12 +20,13 @@
 
 class OutputBuffer;
 
+
 class Logger
 {
 public:
 	Logger(LogLevel logLvl) noexcept;
 
-	GCodeResult Start(time_t time, const StringRef& file, const StringRef& reply) noexcept;
+	void Start(time_t time, const StringRef& file) noexcept;
 	void Stop(time_t time) noexcept;
 	void LogMessage(time_t time, const char *message, MessageType type) noexcept;
 	void LogMessage(time_t time, OutputBuffer *buf, MessageType type) noexcept;
@@ -40,7 +44,7 @@ public:
 
 private:
 	NamedEnum(MessageLogLevel, uint8_t, debug, info, warn, off);
-	MessageLogLevel GetMessageLogLevel(MessageType mt) const noexcept { return (MessageLogLevel) ((mt & MessageType::LogLevelMask) >> MessageType::LogLevelShift); }
+	MessageLogLevel GetMessageLogLevel(MessageType mt) const noexcept { return (MessageLogLevel) ((mt & MessageType::LogOff)>>30); }
 
 	static const uint8_t LogEnabledThreshold = 3;
 

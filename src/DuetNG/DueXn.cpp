@@ -117,14 +117,6 @@ ExpansionBoardType DuetExpansion::DueXnInit() noexcept
 		dueXnExpander.pinModeMultiple(BoardTypePins, INPUT_PULLUP);
 		const uint16_t data = dueXnExpander.digitalReadAll();
 		dueXnBoardType = boardTypes[(data & BoardTypePins) >> BoardTypeShift];
-		// Check whether it is a version 0.11 board
-		pinMode(DIRECTION_PINS[5], INPUT_PULLUP);
-		delayMicroseconds(10);
-		if (!digitalRead(DIRECTION_PINS[5]))
-		{
-			// There is a pulldown on driver 5 direction, so this is a version 0.11 board
-			dueXnBoardType = (ExpansionBoardType)((uint8_t)dueXnBoardType + 1);
-		}
 	}
 	else
 	{
@@ -137,7 +129,7 @@ ExpansionBoardType DuetExpansion::DueXnInit() noexcept
 		pinMode(DueX_SG, INPUT_PULLUP);
 
 		dueXnExpander.pinModeMultiple(AllFanBits, OUTPUT_PWM_LOW);		// Initialise the PWM pins
-		const uint16_t stopBits = (dueXnBoardType == ExpansionBoardType::DueX2) ? AllStopBitsX2 : AllStopBitsX5;	// I am assuming that the X0 and original X2 have 2 endstop inputs
+		const uint16_t stopBits = (dueXnBoardType == ExpansionBoardType::DueX5) ? AllStopBitsX5 : AllStopBitsX2;	// I am assuming that the X0 has 2 endstop inputs
 		dueXnExpander.pinModeMultiple(stopBits | AllGpioBits, INPUT);	// Initialise the endstop inputs and GPIO pins (no pullups because 5V-tolerant)
 		dueXnInputMask = stopBits | AllGpioBits;
 		dueXnExpander.enableInterruptMultiple(dueXnInputMask, InterruptMode::change);
@@ -153,7 +145,7 @@ void DuetExpansion::DueXnTaskInit() noexcept
 	if (dueXnBoardType != ExpansionBoardType::none)
 	{
 		// Set up the interrupt on any input change
-		attachInterrupt(DueX_INT, DueXIrq, InterruptMode::falling, CallbackParameter(nullptr));
+		attachInterrupt(DueX_INT, DueXIrq, InterruptMode::falling, nullptr);
 
 		// Clear any initial interrupts
 		(void)dueXnExpander.interruptSourceAndClear();
@@ -189,16 +181,12 @@ void DuetExpansion::AdditionalOutputInit() noexcept
 // Return the name of the expansion board, or nullptr if no expansion board
 const char* _ecv_array null DuetExpansion::GetExpansionBoardName() noexcept
 {
-	switch (dueXnBoardType)
+	switch(dueXnBoardType)
 	{
 	case ExpansionBoardType::DueX5:
 		return "DueX5";
-	case ExpansionBoardType::DueX5_v0_11:
-		return "DueX5v0.11";
 	case ExpansionBoardType::DueX2:
 		return "DueX2";
-	case ExpansionBoardType::DueX2_v0_11:
-		return "DueX2v0.11";
 	case ExpansionBoardType::DueX0:
 		return "DueX0";
 	default:

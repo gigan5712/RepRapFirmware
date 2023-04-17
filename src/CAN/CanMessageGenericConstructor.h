@@ -14,7 +14,6 @@
 
 #include <CanMessageFormats.h>
 #include <GCodes/GCodeException.h>
-#include <CanMessageGenericTableFormat.h>
 
 class GCodeBuffer;
 
@@ -34,9 +33,8 @@ public:
 	void AddCharParam(char c, char v) THROWS(GCodeException);
 	void AddStringParam(char c, const char* v) THROWS(GCodeException);
 	void AddDriverIdParam(char c, DriverId did) THROWS(GCodeException);
-	void AddFloatArrayParam(char c, const float *v, size_t numV) THROWS(GCodeException);
 
-	GCodeResult SendAndGetResponse(CanMessageType msgType, CanAddress dest, const StringRef& reply) const noexcept;
+	GCodeResult SendAndGetResponse(CanMessageType msgType, CanAddress dest, const StringRef& reply) noexcept;
 
 private:
 	// Return the correct position in the data to insert a parameter. If successful, add the bit to the parameter map and pass back the expected parameter type and size; else throw.

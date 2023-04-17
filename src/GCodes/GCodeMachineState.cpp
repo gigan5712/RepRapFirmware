@@ -12,16 +12,16 @@
 
 // Create a default initialised GCodeMachineState
 GCodeMachineState::GCodeMachineState() noexcept
-	: feedRate(ConvertSpeedFromMmPerMin(DefaultFeedRate)),
-#if HAS_SBC_INTERFACE
+	: feedRate(DefaultFeedRate * SecondsToMinutes),
+#if HAS_LINUX_INTERFACE
 	  fileId(NoFileId),
 #endif
 	  lineNumber(0),
 	  selectedPlane(0), drivesRelative(false), axesRelative(false),
 	  doingFileMacro(false), waitWhileCooling(false), runningM501(false), runningM502(false),
 	  volumetricExtrusion(false), g53Active(false), runningSystemMacro(false), usingInches(false),
-	  waitingForAcknowledgement(false), messageAcknowledged(false), localPush(false), macroRestartable(false), firstCommandAfterRestart(false), commandRepeated(false),
-#if HAS_SBC_INTERFACE
+	  waitingForAcknowledgement(false), messageAcknowledged(false), localPush(false),
+#if HAS_LINUX_INTERFACE
 	  lastCodeFromSbc(false), macroStartedByCode(false), fileFinished(false),
 #endif
 	  compatibility(Compatibility::RepRapFirmware),
@@ -34,10 +34,10 @@ GCodeMachineState::GCodeMachineState() noexcept
 // Copy constructor. This chains the new one to the previous one.
 GCodeMachineState::GCodeMachineState(GCodeMachineState& prev, bool withinSameFile) noexcept
 	: feedRate(prev.feedRate),
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	  fileState(prev.fileState),
 #endif
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	  fileId(prev.fileId),
 #endif
 	  lockedResources(prev.lockedResources),
@@ -45,8 +45,8 @@ GCodeMachineState::GCodeMachineState(GCodeMachineState& prev, bool withinSameFil
 	  selectedPlane(prev.selectedPlane), drivesRelative(prev.drivesRelative), axesRelative(prev.axesRelative),
 	  doingFileMacro(prev.doingFileMacro), waitWhileCooling(prev.waitWhileCooling), runningM501(prev.runningM501), runningM502(prev.runningM502),
 	  volumetricExtrusion(false), g53Active(false), runningSystemMacro(prev.runningSystemMacro), usingInches(prev.usingInches),
-	  waitingForAcknowledgement(false), messageAcknowledged(false), localPush(withinSameFile), firstCommandAfterRestart(prev.firstCommandAfterRestart), commandRepeated(false),
-#if HAS_SBC_INTERFACE
+	  waitingForAcknowledgement(false), messageAcknowledged(false), localPush(withinSameFile),
+#if HAS_LINUX_INTERFACE
 	  lastCodeFromSbc(prev.lastCodeFromSbc), macroStartedByCode(prev.macroStartedByCode), fileFinished(prev.fileFinished),
 #endif
 	  compatibility(prev.compatibility),
@@ -59,43 +59,26 @@ GCodeMachineState::GCodeMachineState(GCodeMachineState& prev, bool withinSameFil
 		{
 			blockStates[i] = prev.blockStates[i];
 		}
-		macroRestartable = prev.macroRestartable;
 	}
 	else
 	{
 		blockStates[0].SetPlainBlock(0);
-		macroRestartable = false;
 	}
 }
 
 GCodeMachineState::~GCodeMachineState() noexcept
 {
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	fileState.Close();
 #endif
 }
 
-// Return true if all nested macros we are running are restartable
-bool GCodeMachineState::CanRestartMacro() const noexcept
-{
-	const GCodeMachineState *p = this;
-	do
-	{
-		if (p->doingFileMacro && !p->macroRestartable)
-		{
-			return false;
-		}
-		p = p->previous;
-	} while (p != nullptr);
-	return true;
-}
-
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 // Set the state to indicate a file is being processed
 void GCodeMachineState::SetFileExecuting() noexcept
 {
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	if (!fileState.IsLive())
 #endif
 	{
@@ -114,13 +97,13 @@ void GCodeMachineState::SetFileExecuting() noexcept
 // Return true if we are reading GCode commands from a file or macro
 bool GCodeMachineState::DoingFile() const noexcept
 {
-#if HAS_SBC_INTERFACE
-	if (reprap.UsingSbcInterface() && fileId != NoFileId)
+#if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface() && fileId != NoFileId)
 	{
 		return true;
 	}
 #endif
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	return fileState.IsLive();
 #else
 	return false;
@@ -130,26 +113,23 @@ bool GCodeMachineState::DoingFile() const noexcept
 // Close the currently executing file
 void GCodeMachineState::CloseFile() noexcept
 {
-#if HAS_SBC_INTERFACE
-	if (reprap.UsingSbcInterface())
+#if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface() && fileId != NoFileId)
 	{
-		if (fileId != NoFileId)
+		const FileId lastFileId = fileId;
+		for (GCodeMachineState *ms = this; ms != nullptr; ms = ms->GetPrevious())
 		{
-			const FileId lastFileId = fileId;
-			for (GCodeMachineState *ms = this; ms != nullptr; ms = ms->GetPrevious())
+			if (ms->fileId == lastFileId)
 			{
-				if (ms->fileId == lastFileId)
-				{
-					ms->fileId = NoFileId;
-					ms->fileFinished = false;
-				}
+				ms->fileId = NoFileId;
+				ms->fileFinished = false;
 			}
 		}
 	}
 	else
 #endif
 	{
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 		fileState.Close();
 #endif
 	}
@@ -158,7 +138,7 @@ void GCodeMachineState::CloseFile() noexcept
 void GCodeMachineState::WaitForAcknowledgement() noexcept
 {
 	waitingForAcknowledgement = true;
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	if (fileState.IsLive())
 	{
 		// Stop reading from the current file

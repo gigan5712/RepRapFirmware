@@ -22,29 +22,26 @@ void OutputBuffer::Append(OutputBuffer *other) noexcept
 	if (other != nullptr)
 	{
 		last->next = other;
-		OutputBuffer * const newLast = other->last;
+		last = other->last;
 		if (other->hadOverflow)
 		{
 			hadOverflow = true;
 		}
 
-		OutputBuffer *item = this;
-		do
+		for (OutputBuffer *item = Next(); item != other; item = item->Next())
 		{
-			item->last = newLast;
-			item = item->Next();
+			item->last = last;
 		}
-		while (item != other);
 	}
 }
 
 void OutputBuffer::IncreaseReferences(size_t refs) noexcept
 {
-	if (refs != 0)
+	if (refs > 0)
 	{
 		TaskCriticalSectionLocker lock;
 
-		for (OutputBuffer *item = this; item != nullptr; item = item->Next())
+		for(OutputBuffer *item = this; item != nullptr; item = item->Next())
 		{
 			item->references += refs;
 			item->isReferenced = true;
@@ -60,6 +57,20 @@ size_t OutputBuffer::Length() const noexcept
 		totalLength += current->DataLength();
 	}
 	return totalLength;
+}
+
+char &OutputBuffer::operator[](size_t index) noexcept
+{
+	// Get the right buffer to access
+	OutputBuffer *itemToIndex = this;
+	while (index >= itemToIndex->DataLength())
+	{
+		index -= itemToIndex->DataLength();
+		itemToIndex = itemToIndex->Next();
+	}
+
+	// Return the char reference
+	return itemToIndex->data[index];
 }
 
 char OutputBuffer::operator[](size_t index) const noexcept
@@ -78,7 +89,7 @@ char OutputBuffer::operator[](size_t index) const noexcept
 
 const char *OutputBuffer::Read(size_t len) noexcept
 {
-	const size_t offset = bytesRead;
+	size_t offset = bytesRead;
 	bytesRead += len;
 	return data + offset;
 }
@@ -94,27 +105,22 @@ void OutputBuffer::Clear() noexcept
 	dataLength = 0;
 }
 
-void OutputBuffer::UpdateWhenQueued() noexcept
-{
-	whenQueued = millis();
-}
-
-size_t OutputBuffer::vprintf(const char *_ecv_array fmt, va_list vargs) noexcept
+size_t OutputBuffer::vprintf(const char *fmt, va_list vargs) noexcept
 {
 	Clear();
 	return vcatf(fmt, vargs);
 }
 
-size_t OutputBuffer::printf(const char *_ecv_array fmt, ...) noexcept
+size_t OutputBuffer::printf(const char *fmt, ...) noexcept
 {
 	va_list vargs;
 	va_start(vargs, fmt);
-	const size_t ret = vprintf(fmt, vargs);
+	size_t ret = vprintf(fmt, vargs);
 	va_end(vargs);
 	return ret;
 }
 
-size_t OutputBuffer::vcatf(const char *_ecv_array fmt, va_list vargs) noexcept
+size_t OutputBuffer::vcatf(const char *fmt, va_list vargs) noexcept
 {
 	return vuprintf([this](char c) noexcept -> bool
 					{
@@ -123,25 +129,21 @@ size_t OutputBuffer::vcatf(const char *_ecv_array fmt, va_list vargs) noexcept
 					fmt, vargs);
 }
 
-size_t OutputBuffer::catf(const char *_ecv_array fmt, ...) noexcept
+size_t OutputBuffer::catf(const char *fmt, ...) noexcept
 {
 	va_list vargs;
 	va_start(vargs, fmt);
-	const size_t ret = vcatf(fmt, vargs);
+	size_t ret = vcatf(fmt, vargs);
 	va_end(vargs);
 	return ret;
 }
 
-size_t OutputBuffer::lcatf(const char *_ecv_array fmt, ...) noexcept
+size_t OutputBuffer::lcatf(const char *fmt, ...) noexcept
 {
 	size_t extra = 0;
-	if (last->dataLength != 0 && last->data[last->dataLength - 1] != '\n')
+	if (Length() != 0 && operator[](Length() - 1) != '\n')
 	{
 		extra = cat('\n');
-		if (extra == 0)
-		{
-			return 0;
-		}
 	}
 
 	va_list vargs;
@@ -159,12 +161,12 @@ size_t OutputBuffer::copy(const char c) noexcept
 	return 1;
 }
 
-size_t OutputBuffer::copy(const char *_ecv_array src) noexcept
+size_t OutputBuffer::copy(const char *src) noexcept
 {
 	return copy(src, strlen(src));
 }
 
-size_t OutputBuffer::copy(const char *_ecv_array src, size_t len) noexcept
+size_t OutputBuffer::copy(const char *src, size_t len) noexcept
 {
 	Clear();
 	return cat(src, len);
@@ -201,17 +203,17 @@ size_t OutputBuffer::cat(const char c) noexcept
 	return 1;
 }
 
-size_t OutputBuffer::cat(const char *_ecv_array src) noexcept
+size_t OutputBuffer::cat(const char *src) noexcept
 {
 	return cat(src, strlen(src));
 }
 
-size_t OutputBuffer::lcat(const char *_ecv_array src) noexcept
+size_t OutputBuffer::lcat(const char *src) noexcept
 {
 	return lcat(src, strlen(src));
 }
 
-size_t OutputBuffer::cat(const char *_ecv_array src, size_t len) noexcept
+size_t OutputBuffer::cat(const char *src, size_t len) noexcept
 {
 	size_t copied = 0;
 	while (copied < len)
@@ -228,12 +230,11 @@ size_t OutputBuffer::cat(const char *_ecv_array src, size_t len) noexcept
 			}
 			nextBuffer->references = references;
 			last->next = nextBuffer;
-			OutputBuffer *item = this;
-			do
+			last = nextBuffer->last;
+			for (OutputBuffer *item = Next(); item != nextBuffer; item = item->Next())
 			{
-				item->last = nextBuffer;
-				item = item->Next();
-			} while (item != nextBuffer);
+				item->last = last;
+			}
 		}
 		const size_t copyLength = min<size_t>(len - copied, OUTPUT_BUFFER_SIZE - last->dataLength);
 		memcpy(last->data + last->dataLength, src + copied, copyLength);
@@ -243,19 +244,13 @@ size_t OutputBuffer::cat(const char *_ecv_array src, size_t len) noexcept
 	return copied;
 }
 
-size_t OutputBuffer::lcat(const char *_ecv_array src, size_t len) noexcept
+size_t OutputBuffer::lcat(const char *src, size_t len) noexcept
 {
-	size_t extra = 0;
-	if (last->dataLength != 0 && last->data[last->dataLength - 1] != '\n')
+	if (Length() != 0)
 	{
-		extra = cat('\n');
-		if (extra == 0)
-		{
-			return 0;
-		}
+		cat('\n');
 	}
-
-	return cat(src, len) + extra;
+	return cat(src, len);
 }
 
 size_t OutputBuffer::cat(StringRef &str) noexcept
@@ -294,11 +289,13 @@ size_t OutputBuffer::EncodeChar(char c) noexcept
 
 	if (esc != 0)
 	{
-		const size_t written = cat('\\');
-		return (written == 0) ? written : written + cat(esc);
+		cat('\\');
+		cat(esc);
+		return 2;
 	}
 
-	return cat(c);
+	cat(c);
+	return 1;
 }
 
 size_t OutputBuffer::EncodeReply(OutputBuffer *src) noexcept
@@ -381,7 +378,7 @@ bool OutputBuffer::WriteToFile(FileData& f) const noexcept
 			buf->references = 1;					// assume it's only used once by default
 			buf->isReferenced = false;
 			buf->hadOverflow = false;
-			buf->UpdateWhenQueued();				// use the time of allocation as the default when-used time
+			buf->whenQueued = millis();				// use the time of allocation as the default when-used time
 
 			return true;
 		}
@@ -492,7 +489,7 @@ bool OutputStack::Push(OutputBuffer *buffer, MessageType type) volatile noexcept
 		{
 			if (buffer != nullptr)
 			{
-				buffer->UpdateWhenQueued();
+				buffer->whenQueued = millis();
 			}
 			items[count] = buffer;
 			types[count] = type;
@@ -538,7 +535,7 @@ MessageType OutputStack::GetFirstItemType() const volatile noexcept
 	return (count == 0) ? MessageType::NoDestinationMessage : types[0];
 }
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 // Update the first item of the stack
 void OutputStack::SetFirstItem(OutputBuffer *buffer) volatile noexcept
@@ -552,7 +549,7 @@ void OutputStack::SetFirstItem(OutputBuffer *buffer) volatile noexcept
 		else
 		{
 			items[0] = buffer;
-			buffer->UpdateWhenQueued();
+			buffer->whenQueued = millis();
 		}
 	}
 }
@@ -583,7 +580,7 @@ bool OutputStack::ApplyTimeout(uint32_t ticks) volatile noexcept
 	if (count != 0)
 	{
 		OutputBuffer * buf = items[0];							// capture volatile variable
-		while (buf != nullptr && millis() - buf->WhenQueued() >= ticks)
+		while (buf != nullptr && millis() - buf->whenQueued >= ticks)
 		{
 			items[0] = buf = OutputBuffer::Release(buf);
 			ret = true;

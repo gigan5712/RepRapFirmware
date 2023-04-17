@@ -13,10 +13,8 @@
 #include <CanMessageBuffer.h>
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
-#include <Platform/Event.h>
 #include <Heating/Heat.h>
 #include "ExpansionManager.h"
-# include <ClosedLoop/ClosedLoop.h>
 
 #ifndef DUET3_ATE
 # include <Movement/Move.h>
@@ -38,8 +36,8 @@
 # include <Accelerometers/Accelerometers.h>
 #endif
 
-#if HAS_SBC_INTERFACE
-# include "SBC/SbcInterface.h"
+#if HAS_LINUX_INTERFACE
+# include "Linux/LinuxInterface.h"
 
 constexpr size_t MaxFileChunkSize = 448;	// Maximum size of file chunks for reading files from the SBC. Should be a multiple of sizeof(CanMessageFirmwareUpdateResponse::data) for best CAN performance
 char sbcFirmwareChunk[MaxFileChunkSize];
@@ -63,16 +61,16 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 		uint32_t fileOffset = msg.fileOffset, fileLength = 0;
 		uint32_t lreq = msg.lengthRequested;
 
-#if HAS_SBC_INTERFACE
-		if (reprap.UsingSbcInterface())
+#if HAS_LINUX_INTERFACE
+		if (reprap.UsingLinuxInterface())
 		{
 			// Fetch the firmware file from the SBC
 			uint32_t bytesRead = min<uint32_t>(lreq, MaxFileChunkSize);
-			if (reprap.GetSbcInterface().GetFileChunk(fname.c_str(), fileOffset, sbcFirmwareChunk, bytesRead, fileLength))
+			if (reprap.GetLinuxInterface().GetFileChunk(fname.c_str(), fileOffset, sbcFirmwareChunk, bytesRead, fileLength))
 			{
 				if (fileOffset >= fileLength)
 				{
-					CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+					CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 					msgp->dataLength = 0;
 					msgp->err = CanMessageFirmwareUpdateResponse::ErrBadOffset;
 					msgp->fileLength = fileLength;
@@ -94,7 +92,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 					size_t bytesSent = 0;
 					for (;;)
 					{
-						CanMessageFirmwareUpdateResponse * msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+						CanMessageFirmwareUpdateResponse * msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 						const size_t lengthToSend = min<size_t>(bytesRead - bytesSent, sizeof(msgp->data));
 						memcpy(msgp->data, sbcFirmwareChunk + bytesSent, lengthToSend);
 						msgp->dataLength = lengthToSend;
@@ -115,9 +113,9 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 						if (bytesSent == (size_t)bytesRead)
 						{
 							bytesRead = min<uint32_t>(lreq, MaxFileChunkSize);
-							if (!reprap.GetSbcInterface().GetFileChunk(fname.c_str(), fileOffset, sbcFirmwareChunk, bytesRead, fileLength))
+							if (!reprap.GetLinuxInterface().GetFileChunk(fname.c_str(), fileOffset, sbcFirmwareChunk, bytesRead, fileLength))
 							{
-								msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+								msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 								msgp->dataLength = 0;
 								msgp->err = CanMessageFirmwareUpdateResponse::ErrOther;
 								msgp->fileLength = fileLength;
@@ -136,7 +134,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 			}
 			else
 			{
-				CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+				CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 				msgp->dataLength = 0;
 				msgp->err = CanMessageFirmwareUpdateResponse::ErrNoFile;
 				msgp->fileLength = fileLength;
@@ -159,7 +157,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 				fileLength = f->Length();
 				if (fileOffset >= fileLength)
 				{
-					CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+					CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 					msgp->dataLength = 0;
 					msgp->err = CanMessageFirmwareUpdateResponse::ErrBadOffset;
 					msgp->fileLength = fileLength;
@@ -181,7 +179,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 
 					for (;;)
 					{
-						CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+						CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 						const size_t lengthToSend = min<size_t>(lreq, sizeof(msgp->data));
 						if (f->Read(msgp->data, lengthToSend) != (int)lengthToSend)
 						{
@@ -218,7 +216,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 
 		if (lreq != 0)			// if we didn't complete the request
 		{
-			CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+			CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 			msgp->dataLength = 0;
 			msgp->err = CanMessageFirmwareUpdateResponse::ErrNoFile;
 			msgp->fileLength = 0;
@@ -238,7 +236,7 @@ pre(buf->id.MsgType() == CanMessageType::firmwareBlockRequest)
 	{
 		const unsigned int bootloaderVersion = msg.bootloaderVersion;
 		const unsigned int fileWanted = msg.fileWanted;
-		CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanInterface::GetCurrentMasterAddress(), src);
+		CanMessageFirmwareUpdateResponse * const msgp = buf->SetupResponseMessage<CanMessageFirmwareUpdateResponse>(0, CanId::MasterAddress, src);
 		msgp->dataLength = 0;
 		msgp->err = CanMessageFirmwareUpdateResponse::ErrOther;
 		msgp->fileLength = 0;
@@ -311,23 +309,23 @@ static GCodeResult EutGetInfo(const CanMessageReturnInfo& msg, const StringRef& 
 		reply.printf("{\"firmwareElectronics\":\"Duet 3 %.0s\"", BOARD_NAME);
 #if HAS_VOLTAGE_MONITOR
 		{
-			const MinCurMax voltages = reprap.GetPlatform().GetPowerVoltages();
+			const MinMaxCurrent voltages = reprap.GetPlatform().GetPowerVoltages();
 			reply.catf(",\"vin\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}",
-					(double)voltages.minimum, (double)voltages.current, (double)voltages.maximum);
+					(double)voltages.min, (double)voltages.current, (double)voltages.max);
 		}
 #endif
 #if HAS_12V_MONITOR
 		{
-			const MinCurMax voltages = reprap.GetPlatform().GetV12Voltages();
+			const MinMaxCurrent voltages = reprap.GetPlatform().GetV12Voltages();
 			reply.catf(",\"v12\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}",
-					(double)voltages.minimum, (double)voltages.current, (double)voltages.maximum);
+					(double)voltages.min, (double)voltages.current, (double)voltages.max);
 		}
 #endif
 		reply.cat('}');
 		break;
 
 	case CanMessageReturnInfo::typeBoardUniqueId:
-		reprap.GetPlatform().GetUniqueId().AppendCharsToString(reply);
+		reply.copy(reprap.GetPlatform().GetUniqueIdString());
 		break;
 
 	case CanMessageReturnInfo::typeDiagnosticsPart0:
@@ -348,7 +346,7 @@ static GCodeResult EutGetInfo(const CanMessageReturnInfo& msg, const StringRef& 
 			const size_t driver = msg.type - (CanMessageReturnInfo::typeDiagnosticsPart0 + 1);
 			reply.lcatf("Driver %u: position %" PRIi32 ", %.1f steps/mm"
 #if HAS_SMART_DRIVERS
-				","
+				", "
 #endif
 				, driver, reprap.GetMove().GetEndPoint(driver), (double)reprap.GetPlatform().DriveStepsPerUnit(driver));
 #if HAS_SMART_DRIVERS
@@ -368,8 +366,8 @@ static GCodeResult EutGetInfo(const CanMessageReturnInfo& msg, const StringRef& 
 			reply.catf("V12: %.1fn", (double)reprap.GetPlatform().GetCurrentV12Voltage());
 #endif
 #if HAS_CPU_TEMP_SENSOR
-			const MinCurMax temps = reprap.GetPlatform().GetMcuTemperatures();
-			reply.catf("MCU temperature: min %.1fC, current %.1fC, max %.1fC", (double)temps.minimum, (double)temps.current, (double)temps.maximum);
+			const MinMaxCurrent temps = reprap.GetPlatform().GetMcuTemperatures();
+			reply.catf("MCU temperature: min %.1fC, current %.1fC, max %.1fC", (double)temps.min, (double)temps.current, (double)temps.max);
 #endif
 		}
 		break;
@@ -378,7 +376,7 @@ static GCodeResult EutGetInfo(const CanMessageReturnInfo& msg, const StringRef& 
 		extra = LastDiagnosticsPart;
 		StepTimer::Diagnostics(reply);
 		break;
-	}
+}
 	return GCodeResult::ok;
 }
 
@@ -389,11 +387,6 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 {
 	if (buf->id.Src() != CanInterface::GetCanAddress())								// I don't think we should receive our own broadcasts, but in case we do...
 	{
-		if (buf->id.Dst() != CanId::BroadcastAddress)
-		{
-			reprap.GetPlatform().OnProcessingCanMessage();
-		}
-
 		const CanMessageType id = buf->id.MsgType();
 #if SUPPORT_REMOTE_COMMANDS
 		if (CanInterface::InExpansionMode())
@@ -414,79 +407,16 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 				reprap.GetMove().AddMoveFromRemote(buf->msg.moveLinear);
 				return;							// no reply needed
 
-#if USE_REMOTE_INPUT_SHAPING
-			case CanMessageType::movementLinearShaped:
-				reprap.GetMove().AddShapedMoveFromRemote(buf->msg.moveLinearShaped);
-				return;							// no reply needed
-#endif
-
-			case CanMessageType::acknowledgeAnnounce:
-				CanInterface::MainBoardAcknowledgedAnnounce();
-				return;
-
 			case CanMessageType::returnInfo:
 				requestId = buf->msg.getInfo.requestId;
 				rslt = EutGetInfo(buf->msg.getInfo, replyRef, extra);
 				break;
 
-			// Heater commands
-			case CanMessageType::m950Heater:
-				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetHeat().ConfigureHeater(buf->msg.generic, replyRef);
-				break;
-
-			case CanMessageType::heaterFeedForward:
-				requestId = buf->msg.heaterFeedForward.requestId;
-				rslt = reprap.GetHeat().FeedForward(buf->msg.heaterFeedForward, replyRef);
-				break;
-
-			case CanMessageType::heaterModelNewNew:
-				requestId = buf->msg.heaterModelNewNew.requestId;
-				rslt = reprap.GetHeat().ProcessM307New(buf->msg.heaterModelNewNew, replyRef);
-				break;
-
-			case CanMessageType::setHeaterTemperature:
-				requestId = buf->msg.setTemp.requestId;
-				rslt = reprap.GetHeat().SetTemperature(buf->msg.setTemp, replyRef);
-				break;
-
-			case CanMessageType::heaterTuningCommand:
-				requestId = buf->msg.heaterTuningCommand.requestId;
-				rslt = reprap.GetHeat().TuningCommand(buf->msg.heaterTuningCommand, replyRef);
-				break;
-
-			case CanMessageType::setHeaterFaultDetection:
-				requestId = buf->msg.setHeaterFaultDetection.requestId;
-				rslt = reprap.GetHeat().SetFaultDetection(buf->msg.setHeaterFaultDetection, replyRef);
-				break;
-
-			case CanMessageType::setHeaterMonitors:
-				requestId = buf->msg.setHeaterMonitors.requestId;
-				rslt = reprap.GetHeat().SetHeaterMonitors(buf->msg.setHeaterMonitors, replyRef);
-				break;
-
 			case CanMessageType::m308New:
 				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetHeat().ProcessM308(buf->msg.generic, replyRef);
+				rslt = reprap.GetHeat().EutProcessM308(buf->msg.generic, replyRef);
 				break;
 
-			// Fan commands
-			case CanMessageType::m950Fan:
-				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetFansManager().ConfigureFanPort(buf->msg.generic, replyRef);
-				break;
-
-			case CanMessageType::fanParameters:
-				requestId = buf->msg.fanParameters.requestId;
-				rslt = reprap.GetFansManager().ConfigureFan(buf->msg.fanParameters, replyRef);
-				break;
-
-			case CanMessageType::setFanSpeed:
-				requestId = buf->msg.setFanSpeed.requestId;
-				rslt = reprap.GetFansManager().SetFanSpeed(buf->msg.setFanSpeed, replyRef);
-				break;
-
-			// GPIO commands
 			case CanMessageType::m950Gpio:
 				requestId = buf->msg.generic.requestId;
 				rslt = reprap.GetPlatform().EutHandleM950Gpio(buf->msg.generic, replyRef);
@@ -512,29 +442,14 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 				rslt = reprap.GetPlatform().EutHandleSetDriverStates(buf->msg.multipleDrivesRequestDriverState, replyRef);
 				break;
 
-			case CanMessageType::m915:
-				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetPlatform().EutProcessM915(buf->msg.generic, replyRef);
-				break;
-
 			case CanMessageType::setPressureAdvance:
 				requestId = buf->msg.multipleDrivesRequestFloat.requestId;
-				rslt = reprap.GetMove().EutSetRemotePressureAdvance(buf->msg.multipleDrivesRequestFloat, buf->dataLength, replyRef);
+				rslt = reprap.GetPlatform().EutSetRemotePressureAdvance(buf->msg.multipleDrivesRequestFloat, buf->dataLength, replyRef);
 				break;
 
 			case CanMessageType::m569:
 				requestId = buf->msg.generic.requestId;
 				rslt = reprap.GetPlatform().EutProcessM569(buf->msg.generic, replyRef);
-				break;
-
-			case CanMessageType::m569p2:
-				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetPlatform().EutProcessM569Point2(buf->msg.generic, replyRef);
-				break;
-
-			case CanMessageType::m569p7:
-				requestId = buf->msg.generic.requestId;
-				rslt = reprap.GetPlatform().EutProcessM569Point7(buf->msg.generic, replyRef);
 				break;
 
 			case CanMessageType::createInputMonitor:
@@ -553,60 +468,36 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 				CanInterface::SendResponseNoFree(buf);
 				return;
 
-			// Filament monitor commands
-			case CanMessageType::createFilamentMonitor:
-				requestId = buf->msg.createFilamentMonitor.requestId;
-				rslt = FilamentMonitor::Create(buf->msg.createFilamentMonitor, replyRef);
-				break;
-
-			case CanMessageType::deleteFilamentMonitor:
-				requestId = buf->msg.deleteFilamentMonitor.requestId;
-				rslt = FilamentMonitor::Delete(buf->msg.deleteFilamentMonitor, replyRef);
-				break;
-
-			case CanMessageType::configureFilamentMonitor:
-				requestId = buf->msg.generic.requestId;
-				rslt = FilamentMonitor::Configure(buf->msg.generic, replyRef);
-				break;
-
 			default:
-				// We received a message type that we don't recognise. If it's a broadcast, ignore it. If it's addressed to us, send a reply.
-				if (buf->id.Src() != CanInterface::GetCanAddress())
-				{
-					return;
-				}
 				requestId = CanRequestIdAcceptAlways;
 				reply.printf("Board %u received unknown msg type %u", CanInterface::GetCanAddress(), (unsigned int)buf->id.MsgType());
 				rslt = GCodeResult::error;
 			}
 
-			if (requestId != CanRequestIdNoReplyNeeded)				// if a reply is needed
+			// Re-use the message buffer to send a standard reply
+			const CanAddress srcAddress = buf->id.Src();
+			CanMessageStandardReply *msg = buf->SetupResponseMessage<CanMessageStandardReply>(requestId, CanInterface::GetCanAddress(), srcAddress);
+			msg->resultCode = (uint16_t)rslt;
+			msg->extra = extra;
+			const size_t totalLength = reply.strlen();
+			size_t lengthDone = 0;
+			uint8_t fragmentNumber = 0;
+			for (;;)
 			{
-				// Re-use the message buffer to send a standard reply
-				const CanAddress srcAddress = buf->id.Src();
-				CanMessageStandardReply *msg = buf->SetupResponseMessage<CanMessageStandardReply>(requestId, CanInterface::GetCanAddress(), srcAddress);
-				msg->resultCode = (uint16_t)rslt;
-				msg->extra = extra;
-				const size_t totalLength = reply.strlen();
-				size_t lengthDone = 0;
-				uint8_t fragmentNumber = 0;
-				for (;;)
+				const size_t fragmentLength = min<size_t>(totalLength - lengthDone, CanMessageStandardReply::MaxTextLength);
+				memcpy(msg->text, reply.c_str() + lengthDone, fragmentLength);
+				lengthDone += fragmentLength;
+				buf->dataLength = msg->GetActualDataLength(fragmentLength);
+				msg->fragmentNumber = fragmentNumber;
+				if (lengthDone == totalLength)
 				{
-					const size_t fragmentLength = min<size_t>(totalLength - lengthDone, CanMessageStandardReply::MaxTextLength);
-					memcpy(msg->text, reply.c_str() + lengthDone, fragmentLength);
-					lengthDone += fragmentLength;
-					buf->dataLength = msg->GetActualDataLength(fragmentLength);
-					msg->fragmentNumber = fragmentNumber;
-					if (lengthDone == totalLength)
-					{
-						msg->moreFollows = false;
-						CanInterface::SendResponseNoFree(buf);
-						break;
-					}
-					msg->moreFollows = true;
+					msg->moreFollows = false;
 					CanInterface::SendResponseNoFree(buf);
-					++fragmentNumber;
+					break;
 				}
+				msg->moreFollows = true;
+				CanInterface::SendResponseNoFree(buf);
+				++fragmentNumber;
 			}
 		}
 		else
@@ -632,14 +523,6 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 				reprap.GetHeat().ProcessRemoteHeatersReport(buf->id.Src(), buf->msg.heatersStatusBroadcast);
 				break;
 
-			case CanMessageType::driversStatusReport:
-				//TODO
-				break;
-
-			case CanMessageType::boardStatusReport:
-				reprap.GetExpansion().ProcessBoardStatusReport(buf);
-				break;
-
 			case CanMessageType::heaterTuningReport:
 				reprap.GetHeat().ProcessRemoteHeaterTuningReport(buf->id.Src(), buf->msg.heaterTuningReport);
 				break;
@@ -648,24 +531,12 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 				reprap.GetFansManager().ProcessRemoteFanRpms(buf->id.Src(), buf->msg.fansReport);
 				break;
 
-			case CanMessageType::announceOld:
-				reprap.GetExpansion().ProcessAnnouncement(buf, false);
-				break;
-
-			case CanMessageType::announceNew:
-				reprap.GetExpansion().ProcessAnnouncement(buf, true);
+			case CanMessageType::announce:
+				reprap.GetExpansion().ProcessAnnouncement(buf);
 				break;
 
 			case CanMessageType::filamentMonitorsStatusReport:
 				FilamentMonitor::UpdateRemoteFilamentStatus(buf->id.Src(), buf->msg.filamentMonitorsStatus);
-				break;
-
-			case CanMessageType::closedLoopData:
-				ClosedLoop::ProcessReceivedData(buf->id.Src(), buf->msg.closedLoopData, buf->dataLength);
-				break;
-
-			case CanMessageType::event:
-				Event::Add(buf->msg.event, buf->id.Src(), buf->dataLength);
 				break;
 
 #if SUPPORT_ACCELEROMETERS
@@ -694,11 +565,11 @@ void CommandProcessor::ProcessReceivedMessage(CanMessageBuffer *buf) noexcept
 					CanInterface::SendResponseNoFree(buf);
 
 					delay(25);							// allow time for the response to be sent before we re-initialise CAN
-					CanInterface::SwitchToExpansionMode(newAddress, true);
+					CanInterface::SwitchToExpansionMode(newAddress);
 				}
 				break;
 #endif
-
+			case CanMessageType::driversStatusReport:	// not handled yet
 			default:
 				if (reprap.Debug(moduleCan))
 				{

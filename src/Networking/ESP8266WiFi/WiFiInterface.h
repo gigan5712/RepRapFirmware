@@ -9,9 +9,6 @@
 #define SRC_NETWORKING_WIFIINTERFACE_H_
 
 #include <RepRapFirmware.h>
-
-#if HAS_WIFI_NETWORKING
-
 #include <Networking/NetworkDefs.h>
 #include <Networking/NetworkInterface.h>
 #include <MessageFormats.h>
@@ -170,7 +167,5 @@ private:
 	char debugMessageBuffer[200];
 	size_t debugMessageChars;
 };
-
-#endif	// HAS_WIFI_NETWORKING
 
 #endif

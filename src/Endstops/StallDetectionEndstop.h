@@ -16,7 +16,8 @@
 class StallDetectionEndstop final : public Endstop
 {
 public:
-	DECLARE_FREELIST_NEW_DELETE(StallDetectionEndstop)
+	void* operator new(size_t sz) noexcept { return FreelistManager::Allocate<StallDetectionEndstop>(); }
+	void operator delete(void* p) noexcept { FreelistManager::Release<StallDetectionEndstop>(p); }
 
 	StallDetectionEndstop(uint8_t p_axis, EndStopPosition pos, bool p_individualMotors) noexcept;		// for creating axis endstops
 	StallDetectionEndstop() noexcept;							// for creating the single extruders endstop
@@ -27,9 +28,7 @@ public:
 	EndstopHitDetails CheckTriggered() noexcept override;
 	bool Acknowledge(EndstopHitDetails what) noexcept override;
 	void AppendDetails(const StringRef& str) noexcept override;
-	bool ShouldReduceAcceleration() const noexcept override { return true; }
-
-	void SetDrivers(DriversBitmap extruderDrivers) noexcept;	// for setting which local extruder drives are active extruder endstops
+	void SetDrivers(DriversBitmap extruderDrivers) noexcept;		// for setting which local extruder drives are active extruder endstops
 
 private:
 	DriversBitmap driversMonitored;

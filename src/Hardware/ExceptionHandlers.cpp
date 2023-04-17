@@ -15,18 +15,10 @@
 # include <Reset.h>
 #endif
 
-#include <exception>							// for std::terminate_handler
-
-#if SAME5x
-// Magic address and value to launch the uf2 bootloader on failure, see inc/uf2.h in uf2-samdx1 repository
-# define DBL_TAP_PTR ((volatile uint32_t *)(HSRAM_ADDR + HSRAM_SIZE - 4))
-# define DBL_TAP_MAGIC 0xf01669ef				// Randomly selected, adjusted to have first and last bit set
-#endif
-
 // Perform a software reset. 'stk' points to the exception stack (r0 r1 r2 r3 r12 lr pc xPSR) if the cause is an exception, otherwise it is nullptr.
 [[noreturn]] void SoftwareReset(SoftwareResetReason initialReason, const uint32_t *stk) noexcept
 {
-	IrqDisable();								// disable interrupts before we call any flash functions. We don't enable them again.
+	IrqDisable();							// disable interrupts before we call any flash functions. We don't enable them again.
 	WatchdogReset();							// kick the watchdog
 
 #if SAME70 || SAM4E
@@ -39,8 +31,7 @@
 	if (initialReason == SoftwareResetReason::erase)
 	{
 #if SAME5x
-		// Start from uf2 bootloader next time. This pretends the reset button has been pressed twice in short succession
-		*DBL_TAP_PTR = DBL_TAP_MAGIC;
+		//TODO invalidate flash so the USB bootloader runs
 #else
 		EraseAndReset();
 #endif
@@ -83,13 +74,14 @@
 #elif !SAME5x
 	RSTC->RSTC_MR = RSTC_MR_KEY_PASSWD;			// ignore any signal on the NRST pin for now so that the reset reason will show as Software
 #endif
-	ResetProcessor();
+	Reset();
 	for(;;) {}
 }
 
 [[noreturn]] void OutOfMemoryHandler() noexcept
 {
-	SoftwareReset(SoftwareResetReason::outOfMemory, GetStackPointer());
+	register const uint32_t * stack_ptr asm ("sp");
+	SoftwareReset(SoftwareResetReason::outOfMemory, stack_ptr);
 }
 
 // Exception handlers
@@ -283,7 +275,8 @@ namespace std
 // The default terminate handler pulls in sprintf and lots of other functions, which makes the binary too large. So we replace it.
 [[noreturn]] void Terminate() noexcept
 {
-	SoftwareReset(SoftwareResetReason::terminateCalled, GetStackPointer());
+	register const uint32_t * stack_ptr asm ("sp");
+	SoftwareReset(SoftwareResetReason::terminateCalled, stack_ptr);
 }
 
 namespace __cxxabiv1
@@ -293,12 +286,14 @@ namespace __cxxabiv1
 
 extern "C" [[noreturn]] void __cxa_pure_virtual() noexcept
 {
-	SoftwareReset(SoftwareResetReason::pureOrDeletedVirtual, GetStackPointer());
+	register const uint32_t * stack_ptr asm ("sp");
+	SoftwareReset(SoftwareResetReason::pureOrDeletedVirtual, stack_ptr);
 }
 
 extern "C" [[noreturn]] void __cxa_deleted_virtual() noexcept
 {
-	SoftwareReset(SoftwareResetReason::pureOrDeletedVirtual, GetStackPointer());
+	register const uint32_t * stack_ptr asm ("sp");
+	SoftwareReset(SoftwareResetReason::pureOrDeletedVirtual, stack_ptr);
 }
 
 // End

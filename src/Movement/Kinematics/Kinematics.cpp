@@ -22,33 +22,6 @@
 
 const char * const Kinematics::HomeAllFileName = "homeall.g";
 
-#if SUPPORT_OBJECT_MODEL
-
-// Object model table and functions
-// Note: if using GCC version 7.3.1 20180622 and lambda functions are used in this table, you must compile this file with option -std=gnu++17.
-// Otherwise the table will be allocated in RAM instead of flash, which wastes too much RAM.
-
-// Macro to build a standard lambda function that includes the necessary type conversions
-#define OBJECT_MODEL_FUNC(...) OBJECT_MODEL_FUNC_BODY(Kinematics, __VA_ARGS__)
-#define OBJECT_MODEL_FUNC_IF(...) OBJECT_MODEL_FUNC_IF_BODY(Kinematics, __VA_ARGS__)
-
-constexpr ObjectModelTableEntry Kinematics::objectModelTable[] =
-{
-	// Within each group, these entries must be in alphabetical order
-	// 0. kinematics members
-	{ "segmentation",		OBJECT_MODEL_FUNC_IF(self->segmentationType.useSegmentation, self, 1), 	ObjectModelEntryFlags::none },
-
-	// 1. segmentation members
-	{ "minSegLength",		OBJECT_MODEL_FUNC(self->minSegmentLength, 2), 							ObjectModelEntryFlags::none },
-	{ "segmentsPerSec",		OBJECT_MODEL_FUNC(self->segmentsPerSecond, 1), 							ObjectModelEntryFlags::none },
-};
-
-constexpr uint8_t Kinematics::objectModelTableDescriptor[] = { 2, 1, 2 };
-
-DEFINE_GET_OBJECT_MODEL_TABLE(Kinematics)
-
-#endif
-
 // Constructor. Pass segsPerSecond <= 0.0 to get non-segmented kinematics.
 Kinematics::Kinematics(KinematicsType t, SegmentationType segType) noexcept
 	: segmentsPerSecond(DefaultSegmentsPerSecond), minSegmentLength(DefaultMinSegmentLength), reciprocalMinSegmentLength(1.0/DefaultMinSegmentLength),
@@ -64,15 +37,7 @@ bool Kinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const StringRef&
 	{
 		if (!gb.Seen('K'))
 		{
-			reply.printf("Kinematics is %s, ", GetName());
-			if (segmentationType.useSegmentation)
-			{
-				reply.catf("%d segments/sec, min. segment length %.2fmm", (int)segmentsPerSecond, (double)minSegmentLength);
-			}
-			else
-			{
-				reply.cat("no segmentation");
-			}
+			reply.printf("Kinematics is %s", GetName());
 		}
 	}
 	else
@@ -102,7 +67,7 @@ bool Kinematics::TryConfigureSegmentation(GCodeBuffer& gb) noexcept
 
 // Return true if the specified XY position is reachable by the print head reference point.
 // This default implementation assumes a rectangular reachable area, so it just uses the bed dimensions give in the M208 command.
-bool Kinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept
+bool Kinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept
 {
 	const Platform& platform = reprap.GetPlatform();
 	return axes.IterateWhile([&platform, axesCoords](unsigned int axis, unsigned int count) -> bool {
@@ -184,16 +149,7 @@ AxesBitmap Kinematics::GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap alread
 		if (toBeHomed.IsBitSet(axis) && (axis != Z_AXIS || !homeZLast || (alreadyHomed & homeFirst) == homeFirst))
 		{
 			filename.copy("home");
-			const char axisLetter = reprap.GetGCodes().GetAxisLetters()[axis];
-			if (islower(axisLetter))
-			{
-				filename.cat('\'');
-				filename.cat(axisLetter);
-			}
-			else
-			{
-				filename.cat(tolower(axisLetter));
-			}
+			filename.cat(tolower(reprap.GetGCodes().GetAxisLetters()[axis]));
 			filename.cat(".g");
 			return AxesBitmap();
 		}
@@ -216,22 +172,6 @@ bool Kinematics::IsContinuousRotationAxis(size_t axis) const noexcept
 	return false;
 }
 
-// Limit the speed and acceleration of a move to values that the mechanics can handle.
-// The speeds in Cartesian space have already been limited.
-// The default implementation in this class just limits the combined XY speed to the lower of the individual X and Y limits. This is appropriate for
-// many types of kinematics, but not for Cartesian.
-void Kinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept
-{
-	const float xyFactor = fastSqrtf(fsquare(normalisedDirectionVector[X_AXIS]) + fsquare(normalisedDirectionVector[Y_AXIS]));
-	if (xyFactor > 0.01)
-	{
-		const Platform& platform = reprap.GetPlatform();
-		const float maxSpeed = min<float>(platform.MaxFeedrate(X_AXIS), platform.MaxFeedrate(Y_AXIS));
-		const float maxAcceleration = min<float>(platform.Acceleration(X_AXIS), platform.Acceleration(Y_AXIS));
-		dda.LimitSpeedAndAcceleration(maxSpeed/xyFactor, maxAcceleration/xyFactor);
-	}
-}
-
 /*static*/ Kinematics *Kinematics::Create(KinematicsType k) noexcept
 {
 	switch (k)
@@ -247,35 +187,18 @@ void Kinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDire
 	case KinematicsType::markForged:
 		return new CoreKinematics(k);
 
-#if SUPPORT_LINEAR_DELTA
 	case KinematicsType::linearDelta:
 		return new LinearDeltaKinematics();
-#endif
-
-#if SUPPORT_SCARA
 	case KinematicsType::scara:
 		return new ScaraKinematics();
-#endif
-
-#if SUPPORT_HANGPRINTER
 	case KinematicsType::hangprinter:
 		return new HangprinterKinematics();
-#endif
-
-#if SUPPORT_POLAR
 	case KinematicsType::polar:
 		return new PolarKinematics();
-#endif
-
-#if SUPPORT_ROTARY_DELTA
 	case KinematicsType::rotaryDelta:
 		return new RotaryDeltaKinematics();
-#endif
-
-#if SUPPORT_FIVEBARSCARA
 	case KinematicsType::fiveBarScara:
 		return new FiveBarScaraKinematics();
-#endif
 	}
 }
 

@@ -31,7 +31,7 @@ public:
 
 	uint32_t NumAxisPoints(size_t axis) const noexcept pre(axis < 2) { return nums[axis]; }
 	uint32_t NumPoints() const noexcept { return nums[0] * nums[1]; }
-	float GetCoordinate(size_t axis, size_t coordinateIndex) const noexcept pre(axis < 2) { return mins[axis] + (coordinateIndex * spacings[axis]); }
+	float GetCoordinate(size_t axis, size_t coordinateIndex) pre(axis < 2) const noexcept { return mins[axis] + (coordinateIndex * spacings[axis]); }
 	bool IsInRadius(float x, float y) const noexcept;
 	bool IsValid() const noexcept { return isValid; }
 
@@ -79,13 +79,22 @@ public:
 	float GetInterpolatedHeightError(float axis0, float axis1) const noexcept;			// Compute the interpolated height error at the specified point
 	void ClearGridHeights() noexcept;													// Clear all grid height corrections
 	void SetGridHeight(size_t axis0Index, size_t axis1Index, float height) noexcept;	// Set the height of a grid point
+	void SetGridHeight(size_t index, float height) noexcept;							// Set the height of a grid point
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool SaveToFile(FileStore *f, const char *fname, float zOffset) noexcept	// Save the grid to file returning true if an error occurred
 	pre(IsValid());
 	bool LoadFromFile(FileStore *f, const char *fname, const StringRef& r) noexcept;	// Load the grid from file returning true if an error occurred
+#endif
 
+#if HAS_MASS_STORAGE || HAS_LINUX_INTERFACE
 	const char *GetFileName() const noexcept { return fileName.c_str(); }
+#endif
+
+#if HAS_LINUX_INTERFACE
+	void SetFileName(const char *name) noexcept;								// Update the filename
+	void SaveToArray(float *array, float zOffset) const noexcept				// Save the grid Z coordinates to an array
+	pre(IsValid());
 #endif
 
 	unsigned int GetMinimumSegments(float deltaAxis0, float deltaAxis1) const noexcept;	// Return the minimum number of segments for a move by this X or Y amount
@@ -103,13 +112,12 @@ private:
 	GridDefinition def;
 	float gridHeights[MaxGridProbePoints];							// The Z coordinates of the points on the bed that were probed
 	LargeBitmap<MaxGridProbePoints> gridHeightSet;					// Bitmap of which heights are set
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE || HAS_LINUX_INTERFACE
 	String<MaxFilenameLength> fileName;								// The name of the file that this height map was loaded from or saved to
 #endif
 	bool useMap;													// True to do bed compensation
 
 	uint32_t GetMapIndex(uint32_t axis0Index, uint32_t axis1Index) const noexcept { return (axis1Index * def.NumAxisPoints(0)) + axis0Index; }
-	void SetGridHeight(size_t index, float height) noexcept;							// Set the height of a grid point
 
 	float InterpolateAxis0Axis1(uint32_t axis0Index, uint32_t axis1Index, float axis0Frac, float axis1Frac) const noexcept;
 };

@@ -10,8 +10,6 @@
 
 #include "SpiTemperatureSensor.h"
 
-#if SUPPORT_SPI_SENSORS
-
 class RtdSensor31865 : public SpiTemperatureSensor
 {
 public:
@@ -32,10 +30,8 @@ private:
 	TemperatureError TryInitRtd() const noexcept;
 	GCodeResult FinishConfiguring(bool changed, const StringRef& reply) noexcept;
 
-	uint32_t rrefTimes100;				// reference resistor in units of 0.01 ohms
+	uint16_t rref;				// reference resistor in ohms
 	uint8_t cr0;
 };
-
-#endif //SUPPORT_SPI_SENSORS
 
 #endif /* SRC_HEATING_RTDSENSOR31865_H_ */

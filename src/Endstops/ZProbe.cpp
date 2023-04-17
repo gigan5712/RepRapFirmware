@@ -56,31 +56,31 @@ constexpr ObjectModelArrayDescriptor ZProbe::speedsArrayDescriptor =
 	nullptr,
 	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t { return ARRAY_SIZE(ZProbe::probeSpeeds); },
 	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue
-				{ return ExpressionValue(InverseConvertSpeedToMmPerMin(((const ZProbe*)self)->probeSpeeds[context.GetLastIndex()]), 1); }
+				{ return ExpressionValue(((const ZProbe*)self)->probeSpeeds[context.GetLastIndex()], 1); }
 };
 
 constexpr ObjectModelTableEntry ZProbe::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
 	// 0. Probe members
-	{ "calibrationTemperature",		OBJECT_MODEL_FUNC(self->calibTemperature, 1), 												ObjectModelEntryFlags::none },
-	{ "deployedByUser",				OBJECT_MODEL_FUNC(self->isDeployedByUser), 													ObjectModelEntryFlags::none },
-	{ "disablesHeaters",			OBJECT_MODEL_FUNC((bool)self->misc.parts.turnHeatersOff), 									ObjectModelEntryFlags::none },
-	{ "diveHeight",					OBJECT_MODEL_FUNC(self->diveHeight, 1), 													ObjectModelEntryFlags::none },
-	{ "lastStopHeight",				OBJECT_MODEL_FUNC(self->lastStopHeight, 3), 												ObjectModelEntryFlags::none },
-	{ "maxProbeCount",				OBJECT_MODEL_FUNC((int32_t)self->misc.parts.maxTaps), 										ObjectModelEntryFlags::none },
-	{ "offsets",					OBJECT_MODEL_FUNC_NOSELF(&offsetsArrayDescriptor), 											ObjectModelEntryFlags::none },
-	{ "recoveryTime",				OBJECT_MODEL_FUNC(self->recoveryTime, 1), 													ObjectModelEntryFlags::none },
-	{ "speed",						OBJECT_MODEL_FUNC(InverseConvertSpeedToMmPerMin(self->probeSpeeds[1]), 1),					ObjectModelEntryFlags::obsolete },
-	{ "speeds",						OBJECT_MODEL_FUNC_NOSELF(&speedsArrayDescriptor), 											ObjectModelEntryFlags::none },
-	{ "temperatureCoefficient",		OBJECT_MODEL_FUNC(self->temperatureCoefficients[0], 5), 									ObjectModelEntryFlags::obsolete },
-	{ "temperatureCoefficients",	OBJECT_MODEL_FUNC_NOSELF(&temperatureCoefficientsArrayDescriptor), 							ObjectModelEntryFlags::none },
-	{ "threshold",					OBJECT_MODEL_FUNC((int32_t)self->adcValue), 												ObjectModelEntryFlags::none },
-	{ "tolerance",					OBJECT_MODEL_FUNC(self->tolerance, 3), 														ObjectModelEntryFlags::none },
-	{ "travelSpeed",				OBJECT_MODEL_FUNC(InverseConvertSpeedToMmPerMin(self->travelSpeed), 1), 					ObjectModelEntryFlags::none },
-	{ "triggerHeight",				OBJECT_MODEL_FUNC(-self->offsets[Z_AXIS], 3), 												ObjectModelEntryFlags::none },
-	{ "type",						OBJECT_MODEL_FUNC((int32_t)self->type), 													ObjectModelEntryFlags::none },
-	{ "value",						OBJECT_MODEL_FUNC_NOSELF(&valueArrayDescriptor), 											ObjectModelEntryFlags::live },
+	{ "calibrationTemperature",		OBJECT_MODEL_FUNC(self->calibTemperature, 1), 						ObjectModelEntryFlags::none },
+	{ "deployedByUser",				OBJECT_MODEL_FUNC(self->isDeployedByUser), 							ObjectModelEntryFlags::none },
+	{ "disablesHeaters",			OBJECT_MODEL_FUNC((bool)self->misc.parts.turnHeatersOff), 			ObjectModelEntryFlags::none },
+	{ "diveHeight",					OBJECT_MODEL_FUNC(self->diveHeight, 1), 							ObjectModelEntryFlags::none },
+	{ "lastStopHeight",				OBJECT_MODEL_FUNC(self->lastStopHeight, 3), 						ObjectModelEntryFlags::none },
+	{ "maxProbeCount",				OBJECT_MODEL_FUNC((int32_t)self->misc.parts.maxTaps), 				ObjectModelEntryFlags::none },
+	{ "offsets",					OBJECT_MODEL_FUNC_NOSELF(&offsetsArrayDescriptor), 					ObjectModelEntryFlags::none },
+	{ "recoveryTime",				OBJECT_MODEL_FUNC(self->recoveryTime, 1), 							ObjectModelEntryFlags::none },
+	{ "speed",						OBJECT_MODEL_FUNC(self->probeSpeeds[1], 1), 						ObjectModelEntryFlags::obsolete },
+	{ "speeds",						OBJECT_MODEL_FUNC_NOSELF(&speedsArrayDescriptor), 					ObjectModelEntryFlags::none },
+	{ "temperatureCoefficient",		OBJECT_MODEL_FUNC(self->temperatureCoefficients[0], 5), 			ObjectModelEntryFlags::obsolete },
+	{ "temperatureCoefficients",	OBJECT_MODEL_FUNC_NOSELF(&temperatureCoefficientsArrayDescriptor), 	ObjectModelEntryFlags::none },
+	{ "threshold",					OBJECT_MODEL_FUNC((int32_t)self->adcValue), 						ObjectModelEntryFlags::none },
+	{ "tolerance",					OBJECT_MODEL_FUNC(self->tolerance, 3), 								ObjectModelEntryFlags::none },
+	{ "travelSpeed",				OBJECT_MODEL_FUNC(self->travelSpeed, 1), 							ObjectModelEntryFlags::none },
+	{ "triggerHeight",				OBJECT_MODEL_FUNC(self->triggerHeight, 3), 							ObjectModelEntryFlags::none },
+	{ "type",						OBJECT_MODEL_FUNC((int32_t)self->type), 							ObjectModelEntryFlags::none },
+	{ "value",						OBJECT_MODEL_FUNC_NOSELF(&valueArrayDescriptor), 					ObjectModelEntryFlags::live },
 };
 
 constexpr uint8_t ZProbe::objectModelTableDescriptor[] = { 1, 18 };
@@ -102,15 +102,15 @@ void ZProbe::SetDefaults() noexcept
 	{
 		offset = 0.0;
 	}
-	offsets[Z_AXIS] = -DefaultZProbeTriggerHeight;
+	triggerHeight = DefaultZProbeTriggerHeight;
 	calibTemperature = DefaultZProbeTemperature;
 	for (float& tc : temperatureCoefficients)
 	{
 		tc = 0.0;
 	}
 	diveHeight = DefaultZDive;
-	probeSpeeds[0] = probeSpeeds[1] = ConvertSpeedFromMmPerSec(DefaultProbingSpeed);
-	travelSpeed = ConvertSpeedFromMmPerSec(DefaultZProbeTravelSpeed);
+	probeSpeeds[0] = probeSpeeds[1] = DefaultProbingSpeed;
+	travelSpeed = DefaultZProbeTravelSpeed;
 	recoveryTime = 0.0;
 	tolerance = DefaultZProbeTolerance;
 	misc.parts.maxTaps = DefaultZProbeTaps;
@@ -128,13 +128,13 @@ float ZProbe::GetActualTriggerHeight() const noexcept
 		if (err == TemperatureError::success)
 		{
 			const float dt = temperature - calibTemperature;
-			return (dt * temperatureCoefficients[0]) + (fsquare(dt) * temperatureCoefficients[1]) - offsets[Z_AXIS];
+			return (dt * temperatureCoefficients[0]) + (fsquare(dt) * temperatureCoefficients[1]) + triggerHeight;
 		}
 	}
-	return -offsets[Z_AXIS];
+	return triggerHeight;
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 bool ZProbe::WriteParameters(FileStore *f, unsigned int probeNumber) const noexcept
 {
@@ -149,7 +149,7 @@ bool ZProbe::WriteParameters(FileStore *f, unsigned int probeNumber) const noexc
 			scratchString.catf(" %c%.1f", axisLetters[i], (double)offsets[i]);
 		}
 	}
-	scratchString.catf(" Z%.2f\n", (double)-offsets[Z_AXIS]);
+	scratchString.catf(" Z%.2f\n", (double)triggerHeight);
 	return f->Write(scratchString.c_str());
 }
 
@@ -280,41 +280,39 @@ GCodeResult ZProbe::HandleG31(GCodeBuffer& gb, const StringRef& reply) THROWS(GC
 		const float currentTemperature = reprap.GetHeat().GetSensorTemperature(newSensor, terr);
 		if (terr == TemperatureError::unknownSensor)
 		{
-			reply.printf("Temperature coefficients ignored due to invalid sensor number %d", newSensor);
-			err = GCodeResult::warning;
+			reply.printf("Cannot set a temperature coefficient with invalid sensor number %d", newSensor);
+			return GCodeResult::error;
+		}
+
+		size_t numValues = ARRAY_SIZE(temperatureCoefficients);
+		gb.GetFloatArray(temperatureCoefficients, numValues, false);
+		float newCalibTemperature = DefaultZProbeTemperature;
+
+		if (gb.Seen('S'))
+		{
+			newCalibTemperature = gb.GetFValue();
+		}
+		else if (terr == TemperatureError::success)
+		{
+			newCalibTemperature = currentTemperature;
+		}
+		else if (!gb.IsTimerRunning())				// the sensor may have only just been configured, so give it 500ms to produce a reading
+		{
+			gb.StartTimer();
+			return GCodeResult::notFinished;
+		}
+		else if (millis() - gb.WhenTimerStarted() < 500)
+		{
+			return GCodeResult::notFinished;
 		}
 		else
 		{
-			size_t numValues = ARRAY_SIZE(temperatureCoefficients);
-			gb.GetFloatArray(temperatureCoefficients, numValues, false);
-			float newCalibTemperature = DefaultZProbeTemperature;
-
-			if (gb.Seen('S'))
-			{
-				newCalibTemperature = gb.GetFValue();
-			}
-			else if (terr == TemperatureError::success)
-			{
-				newCalibTemperature = currentTemperature;
-			}
-			else if (!gb.IsTimerRunning())				// the sensor may have only just been configured, so give it 500ms to produce a reading
-			{
-				gb.StartTimer();
-				return GCodeResult::notFinished;
-			}
-			else if (millis() - gb.WhenTimerStarted() < 500)
-			{
-				return GCodeResult::notFinished;
-			}
-			else
-			{
-				gb.StopTimer();
-				reply.printf("Sensor %d did not provide a valid temperature reading, using default", newSensor);
-				err = GCodeResult::warning;
-			}
 			gb.StopTimer();
-			calibTemperature = newCalibTemperature;
+			reply.printf("Sensor %d did not provide a valid temperature reading", newSensor);
+			err = GCodeResult::error;
 		}
+		gb.StopTimer();
+		calibTemperature = newCalibTemperature;
 	}
 
 	// After this we don't return notFinished, so it is safe to amend values directly
@@ -327,14 +325,7 @@ GCodeResult ZProbe::HandleG31(GCodeBuffer& gb, const StringRef& reply) THROWS(GC
 			gb.TryGetFValue(axisLetters[i], offsets[i], seen);
 		}
 	}
-
-	{
-		float triggerHeight;
-		if (gb.TryGetFValue(axisLetters[Z_AXIS], triggerHeight, seen))
-		{
-			offsets[Z_AXIS] = -triggerHeight;				// logically, the Z offset of the Z probe is the negative of the trigger height
-		}
-	}
+	gb.TryGetFValue(axisLetters[Z_AXIS], triggerHeight, seen);
 
 	if (gb.Seen('P'))
 	{
@@ -360,7 +351,7 @@ GCodeResult ZProbe::HandleG31(GCodeBuffer& gb, const StringRef& reply) THROWS(GC
 		{
 			reply.catf(" (%d)", v1);
 		}
-		reply.catf(", threshold %d, trigger height %.3f", adcValue, (double)-offsets[Z_AXIS]);
+		reply.catf(", threshold %d, trigger height %.3f", adcValue, (double)triggerHeight);
 		if (temperatureCoefficients[0] != 0.0)
 		{
 			reply.catf(" at %.1f" DEGREE_SYMBOL "C, temperature coefficients [%.1f/" DEGREE_SYMBOL "C, %.1f/" DEGREE_SYMBOL "C^2]",
@@ -386,14 +377,14 @@ GCodeResult ZProbe::Configure(GCodeBuffer& gb, const StringRef &reply, bool& see
 		float userProbeSpeeds[2];
 		size_t numSpeeds = 2;
 		gb.GetFloatArray(userProbeSpeeds, numSpeeds, true);
-		probeSpeeds[0] = ConvertSpeedFromMmPerMin(userProbeSpeeds[0]);
-		probeSpeeds[1] = ConvertSpeedFromMmPerMin(userProbeSpeeds[1]);
+		probeSpeeds[0] = userProbeSpeeds[0] * SecondsToMinutes;
+		probeSpeeds[1] = userProbeSpeeds[1] * SecondsToMinutes;
 		seen = true;
 	}
 
 	if (gb.Seen('T'))		// travel speed to probe point
 	{
-		travelSpeed = gb.GetSpeedFromMm(false);
+		travelSpeed = gb.GetFValue() * SecondsToMinutes;
 		seen = true;
 	}
 
@@ -422,9 +413,7 @@ GCodeResult ZProbe::Configure(GCodeBuffer& gb, const StringRef &reply, bool& see
 	const GCodeResult rslt = AppendPinNames(reply);
 	reply.catf(", dive height %.1fmm, probe speeds %d,%dmm/min, travel speed %dmm/min, recovery time %.2f sec, heaters %s, max taps %u, max diff %.2f",
 					(double)diveHeight,
-					(int)InverseConvertSpeedToMmPerMin(probeSpeeds[0]),
-					(int)InverseConvertSpeedToMmPerMin(probeSpeeds[1]),
-					(int)InverseConvertSpeedToMmPerMin(travelSpeed),
+					(int)(probeSpeeds[0] * MinutesToSeconds), (int)(probeSpeeds[1] * MinutesToSeconds), (int)(travelSpeed * MinutesToSeconds),
 					(double)recoveryTime,
 					(misc.parts.turnHeatersOff) ? "suspended" : "normal",
 						misc.parts.maxTaps, (double)tolerance);

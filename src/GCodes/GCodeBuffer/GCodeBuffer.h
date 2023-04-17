@@ -14,9 +14,7 @@
 #include <RepRapFirmware.h>
 #include <GCodes/GCodeChannel.h>
 #include <GCodes/GCodeMachineState.h>
-#if HAS_SBC_INTERFACE
-# include <SBC/SbcMessageFormats.h>
-#endif
+#include <Linux/LinuxMessageFormats.h>
 #include <ObjectModel/ObjectModel.h>
 
 class FileGCodeInput;
@@ -50,7 +48,7 @@ public:
 	void Diagnostics(MessageType mtype) noexcept;								// Write some debug info
 
 	bool Put(char c) noexcept SPEED_CRITICAL;									// Add a character to the end
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	void PutBinary(const uint32_t *data, size_t len) noexcept;					// Add an entire binary G-Code, overwriting any existing content
 #endif
 	void PutAndDecode(const char *data, size_t len) noexcept;					// Add an entire G-Code, overwriting any existing content
@@ -74,13 +72,9 @@ public:
 	bool Seen(char c) noexcept SPEED_CRITICAL;										// Is a character present?
 	void MustSee(char c) THROWS(GCodeException);									// Test for character present, throw error if not
 	char MustSee(char c1, char c2) THROWS(GCodeException);							// Test for one of two characters present, throw error if not
-	inline bool SeenAny(const char *s) const noexcept { return SeenAny(Bitmap<uint32_t>(ParametersToBitmap(s))); }
 
 	float GetFValue() THROWS(GCodeException) SPEED_CRITICAL;						// Get a float after a key letter
 	float GetDistance() THROWS(GCodeException);										// Get a distance or coordinate and convert it from inches to mm if necessary
-	float GetSpeed() THROWS(GCodeException);										// Get a speed in mm/min or inches/min and convert it to mm/step_clock
-	float GetSpeedFromMm(bool useSeconds) THROWS(GCodeException);					// Get a speed in mm/min or optionally /sec and convert it to mm/step_clock
-	float GetAcceleration() THROWS(GCodeException);									// Get an acceleration in mm/sec^2 or inches/sec^2 and convert it to mm/step_clock^2
 	int32_t GetIValue() THROWS(GCodeException) SPEED_CRITICAL;						// Get an integer after a key letter
 	int32_t GetLimitedIValue(char c, int32_t minValue, int32_t maxValue) THROWS(GCodeException)
 		pre(minvalue <= maxValue)
@@ -133,13 +127,8 @@ public:
 	GCodeMachineState::BlockState& GetBlockState() const noexcept { return CurrentFileMachineState().CurrentBlockState(); }
 	uint16_t GetBlockIndent() const noexcept { return GetBlockState().GetIndent(); }
 
-	void UseInches(bool inchesNotMm) noexcept { machineState->usingInches = inchesNotMm; }
-	bool UsingInches() const noexcept { return machineState->usingInches; }
 	float ConvertDistance(float distance) const noexcept;
 	float InverseConvertDistance(float distance) const noexcept;
-	float ConvertSpeed(float speed) const noexcept;
-	float InverseConvertSpeed(float speed) const noexcept;
-	const char *GetDistanceUnits() const noexcept;
 	unsigned int GetStackDepth() const noexcept;
 	bool PushState(bool withinSameFile) noexcept;				// Push state returning true if successful (i.e. stack not overflowed)
 	bool PopState(bool withinSameFile) noexcept;				// Pop state returning true if successful (i.e. no stack underrun)
@@ -152,13 +141,12 @@ public:
 
 	void WaitForAcknowledgement() noexcept;						// Flag that we are waiting for acknowledgement
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	bool IsBinary() const noexcept { return isBinaryBuffer; }	// Return true if the code is in binary format
 
 	bool IsFileFinished() const noexcept;						// Return true if this source has finished execution of a file
 	void SetFileFinished() noexcept;							// Mark the current file as finished
 	void SetPrintFinished() noexcept;							// Mark the current print file as finished
-	void ClosePrintFile() noexcept;								// Close the print file
 
 	bool RequestMacroFile(const char *filename, bool fromCode) noexcept;	// Request execution of a file macro
 	volatile bool IsWaitingForMacro() const noexcept { return isWaitingForMacro; }	// Indicates if the GB is waiting for a macro to be opened
@@ -229,7 +217,7 @@ public:
 
 	void RestartFrom(FilePosition pos) noexcept;
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	FileGCodeInput *GetFileInput() const noexcept { return fileInput; }
 #endif
 	GCodeInput *GetNormalInput() const noexcept { return normalInput; }
@@ -241,25 +229,12 @@ public:
 	void AddParameters(VariableSet& vars, int codeRunning) noexcept;
 	VariableSet& GetVariables() const noexcept;
 
-#if SUPPORT_COORDINATE_ROTATION
-	bool DoingCoordinateRotation() const noexcept;
-#endif
-
 	Mutex mutex;
 
 protected:
 	DECLARE_OBJECT_MODEL
 
 private:
-	bool SeenAny(Bitmap<uint32_t> bm) const noexcept;								// Return true if any of the parameter letters in the bitmap were seen
-
-	// Convert a string of uppercase parameter letters to a bit map
-	static inline constexpr uint32_t ParametersToBitmap(const char *s) noexcept
-	{
-		return (*s == 0) ? 0
-			: (*s >= 'A' && *s <= 'Z') ? ((uint32_t)1 << (*s - 'A')) | ParametersToBitmap(s + 1)
-				: ParametersToBitmap(s + 1);
-	}
 
 #if SUPPORT_OBJECT_MODEL
 	const char *GetStateText() const noexcept;
@@ -268,7 +243,7 @@ private:
 	const GCodeChannel codeChannel;						// Channel number of this instance
 	GCodeInput *normalInput;							// Our normal input stream, or nullptr if there isn't one
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	FileGCodeInput *fileInput;							// Our file input stream for when we are reading from a print file or a macro file, may be shared with other GCodeBuffers
 #endif
 
@@ -276,7 +251,7 @@ private:
 
 	GCodeResult lastResult;
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	BinaryParser binaryParser;
 #endif
 
@@ -289,18 +264,20 @@ private:
 	uint32_t whenReportDueTimerStarted;					// When the report-due-timer has been started
 	static constexpr uint32_t reportDueInterval = 1000;	// Interval in which we send in ms
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	bool isBinaryBuffer;
 #endif
 	bool timerRunning;									// True if we are waiting
 	bool motionCommanded;								// true if this GCode stream has commanded motion since it last waited for motion to stop
 
-	alignas(4) char buffer[MaxGCodeLength];				// must be aligned because in SBC binary mode we do dword fetches from it
+#if HAS_LINUX_INTERFACE
+	alignas(4) char buffer[MaxCodeBufferSize];			// must be aligned because we do dword fetches from it
+#else
+	char buffer[GCODE_LENGTH];
+#endif
 
-#if HAS_SBC_INTERFACE
-	static_assert(MaxGCodeLength >= MaxCodeBufferSize);	// make sure the GCodeBuffer is large enough to hold a command received from the SBC in binary
-
-	// Accessed by both the Main and SBC tasks
+#if HAS_LINUX_INTERFACE
+	// Accessed by both the Main and Linux tasks
 	BinarySemaphore macroSemaphore;
 	volatile bool isWaitingForMacro;	// Is this GB waiting in DoFileMacro?
 	volatile bool macroFileClosed;		// Last macro file has been closed in RRF, tell the SBC
@@ -317,21 +294,21 @@ private:
 		messagePromptPending : 1,	// Has the SBC been notified about a message waiting for acknowledgement?
 		messageAcknowledged : 1;	// Last message has been acknowledged
 
-	// Accessed only by the SBC task
+	// Accessed only by the Linux task
 	bool invalidated;				// Set to true if the GB content is not valid and about to be cleared
 #endif
 };
 
 inline bool GCodeBuffer::IsDoingFileMacro() const noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	return machineState->doingFileMacro || IsMacroRequestPending();
 #else
 	return machineState->doingFileMacro;
 #endif
 }
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 inline bool GCodeBuffer::IsFileFinished() const noexcept
 {
@@ -366,16 +343,15 @@ inline void GCodeBuffer::AdvanceState() noexcept
 	machineState->AdvanceState();
 }
 
-// Return true if we can queue the current gcode command from this source. This is the case if a file is being executed.
-// We can't queue it if it contains an expression, because the expression value may change or refer to 'iterations'.
+// Return true if we can queue gcodes from this source. This is the case if a file is being executed
 inline bool GCodeBuffer::CanQueueCodes() const noexcept
 {
-	return machineState->DoingFile() && !ContainsExpression();
+	return machineState->DoingFile();
 }
 
 inline bool GCodeBuffer::IsDoingFile() const noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	return machineState->DoingFile() || IsMacroRequestPending();
 #else
 	return machineState->DoingFile();
@@ -395,7 +371,7 @@ inline bool GCodeBuffer::IsExecuting() const noexcept
 // Return true if this source is executing a file from the local SD card
 inline bool GCodeBuffer::IsDoingLocalFile() const noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	return !IsBinary() && IsDoingFile();
 #else
 	return IsDoingFile();

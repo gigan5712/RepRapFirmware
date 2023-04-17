@@ -124,7 +124,7 @@ public:
 	// Do nothing if auto calibration is not supported.
 	virtual void SetCalibrationDefaults() noexcept { }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	// Write the parameters that are set by auto calibration to the config-override.g file, returning true if success
 	// Just return true if auto calibration is not supported.
 	virtual bool WriteCalibrationParameters(FileStore *f) const noexcept { return true; }
@@ -136,7 +136,7 @@ public:
 
 	// Return true if the positions specified for the axes in the AxesBitmap are reachable by the print head reference point.
 	// The default implementation assumes a rectangular reachable area, so it just uses the bed dimensions give in the M208 commands.
-	virtual bool IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept;
+	virtual bool IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept;
 
 	// Limit the Cartesian position that the user wants to move to, returning true if any coordinates were changed
 	// The default implementation just applies the rectangular limits set up by M208 to those axes that have been homed.
@@ -154,6 +154,12 @@ public:
 
 	// Override this one if any axes do not use the linear motion code (e.g. for segmentation-free delta motion)
 	virtual MotionType GetMotionType(size_t axis) const noexcept { return MotionType::linear; }
+
+	// Override this if the number of homing buttons (excluding the home all button) is not the same as the number of visible axes (e.g. on a delta printer)
+	virtual size_t NumHomingButtons(size_t numVisibleAxes) const noexcept { return numVisibleAxes; }
+
+	// Override this if the homing buttons are not named after the axes (e.g. SCARA printer)
+	virtual const char* HomingButtonNames() const noexcept { return "XYZUVWABC"; }
 
 	// This function is called when a request is made to home the axes in 'toBeHomed' and the axes in 'alreadyHomed' have already been homed.
 	// If we can't proceed because other axes need to be homed first, return those axes.
@@ -180,16 +186,14 @@ public:
 	// This default is good for Cartesian and Core printers, but not deltas or SCARA
 	virtual AxesBitmap MustBeHomedAxes(AxesBitmap axesMoving, bool disallowMovesBeforeHoming) const noexcept { return (disallowMovesBeforeHoming) ? axesMoving : AxesBitmap(); }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	// Write any calibration data that we need to resume a print after power fail, returning true if successful. Override where necessary.
 	virtual bool WriteResumeSettings(FileStore *f) const noexcept { return true; }
 #endif
 
 	// Limit the speed and acceleration of a move to values that the mechanics can handle.
 	// The speeds along individual Cartesian axes have already been limited before this is called.
-	// The default implementation in this class just limits the combined XY speed to the lower of the individual X and Y limits. This is appropriate for
-	// many types of kinematics, but not for Cartesian.
-	virtual void LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept;
+	virtual void LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept = 0;
 
 	// Return true if the specified axis is a continuous rotational axis and G0 commands may choose which direction to move it in
 	virtual bool IsContinuousRotationAxis(size_t axis) const noexcept;
@@ -219,7 +223,7 @@ public:
 	float GetReciprocalMinSegmentLength() const noexcept pre(UseSegmentation()) { return reciprocalMinSegmentLength; }
 
 protected:
-	DECLARE_OBJECT_MODEL
+	DECLARE_OBJECT_MODEL_VIRTUAL
 
 	Kinematics(KinematicsType t, SegmentationType segType) noexcept;
 

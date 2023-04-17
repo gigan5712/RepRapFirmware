@@ -11,7 +11,6 @@
 #include "GCodes.h"
 #include "GCodeBuffer/GCodeBuffer.h"
 #include <Movement/Move.h>
-#include <Fans/LedStripDriver.h>
 
 // GCodeQueue class
 
@@ -23,7 +22,7 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 	}
 }
 
-// Return true if the move in the GCodeBuffer should be queued. Caller has already checked that the command does not contain an expression.
+// Return true if the move in the GCodeBuffer should be queued
 /*static*/ bool GCodeQueue::ShouldQueueCode(GCodeBuffer &gb) THROWS(GCodeException)
 {
 #if SUPPORT_ROLAND
@@ -38,15 +37,13 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 	const uint32_t scheduledMoves = reprap.GetMove().GetScheduledMoves();
 	if (scheduledMoves != reprap.GetMove().GetCompletedMoves())
 	{
-		bool shouldQueue;
 		switch (gb.GetCommandLetter())
 		{
 		case 'G':
-			shouldQueue = gb.GetCommandNumber() == 10
-						&& gb.Seen('P')
-						&& !gb.Seen('L')
-						&& (gb.Seen('R') || gb.Seen('S'));						// set active/standby temperatures
-			break;
+			return gb.GetCommandNumber() == 10
+				&& gb.Seen('P')
+				&& !gb.Seen('L')
+				&& (gb.Seen('R') || gb.Seen('S'));	// Set active/standby temperatures
 
 		case 'M':
 			{
@@ -55,8 +52,7 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 				case 3:		// spindle or laser control
 				case 5:		// spindle or laser control
 					// On laser devices we use these codes to set the default laser power for the next G1 command
-					shouldQueue = reprap.GetGCodes().GetMachineType() != MachineType::laser;
-					break;
+					return reprap.GetGCodes().GetMachineType() != MachineType::laser;
 
 				case 4:		// spindle control
 				case 42:	// set IO pin
@@ -66,11 +62,11 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 				case 140:	// set bed temperature and return immediately
 				case 141:	// set chamber temperature and return immediately
 				case 144:	// bed standby
+				case 150:	// set LED colours
 				case 280:	// set servo
 				case 300:	// beep
 				case 568:	// spindle or temperature control
-					shouldQueue = true;
-					break;
+					return true;
 
 				case 117:	// display message
 					{
@@ -79,36 +75,24 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 						String<M117StringLength> dummy;
 						gb.GetUnprecedentedString(dummy.GetRef());
 					}
-					shouldQueue = true;
-					break;
+					return true;
 
-#if SUPPORT_LED_STRIPS
-				case 150:	// set LED colours
-					shouldQueue = !LedStripDriver::MustStopMovement(gb);		// if it is going to call LockMovementAndWaitForStandstill then we mustn't queue it
-					break;
-#endif
-				// A note about M291:
-				// - We cannot queue M291 messages that are blocking, i.e. with S2 or S3 parameter
-				// - If we queue non-blocking M291 messages then it can happen that if a non-blocking M291 is used and a little later a blocking M291 is used,
-				//   then the blocking one gets displayed while the non-blocking one is still in the queue. Then the non-blocking one overwrites it, and the
-				//   blocking one can no longer be acknowledged except by sending M292 manually.
-				// - Therefore we no longer queue any M291 commands.
 				case 291:
+					{
+						bool seen = false;
+						int32_t sParam = 1;
+						gb.TryGetIValue('S', sParam, seen);
+						return sParam < 2;					// queue non-blocking messages only
+					}
+
 				default:
-					shouldQueue = false;
 					break;
 				}
 			}
 			break;
 
 		default:
-			shouldQueue = false;
 			break;
-		}
-
-		if (shouldQueue)
-		{
-			return gb.DataLength() <= BufferSizePerQueueItem;					// only queue it if it is short enough to fit in a queue item
 		}
 	}
 
@@ -117,11 +101,13 @@ GCodeQueue::GCodeQueue() noexcept : freeItems(nullptr), queuedItems(nullptr)
 
 // Try to queue the command in the passed GCodeBuffer.
 // If successful, return true to indicate it has been queued.
-// If the queue is full, return false. Caller will wait for space to become available.
+// If the queue is full or the command is too long to be queued, return false.
 bool GCodeQueue::QueueCode(GCodeBuffer &gb, uint32_t scheduleAt) noexcept
 {
 	// Can we queue this code somewhere?
-	if (freeItems == nullptr)
+	if (freeItems == nullptr || gb.DataLength() > BufferSizePerQueueItem
+		|| gb.ContainsExpression()						// if it contains an expression then the expression value may change or refer to 'iterations'
+	   )
 	{
 		return false;
 	}
@@ -234,24 +220,24 @@ void GCodeQueue::Clear() noexcept
 
 void GCodeQueue::Diagnostics(MessageType mtype) noexcept
 {
-	if (queuedItems == nullptr)
-	{
-		reprap.GetPlatform().Message(mtype, "Code queue is empty\n");
-	}
-	else
+	reprap.GetPlatform().MessageF(mtype, "Code queue is %s\n", (queuedItems == nullptr) ? "empty." : "not empty:");
+	if (queuedItems != nullptr)
 	{
 		const QueuedCode *item = queuedItems;
+		size_t queueLength = 0;
 		do
 		{
-#if HAS_SBC_INTERFACE
+			queueLength++;
+#if HAS_LINUX_INTERFACE
 			// The following may output binary gibberish if this code is stored in binary.
 			// We could restore this message by using GCodeBuffer::AppendFullCommand but there is probably no need to
-			if (!reprap.UsingSbcInterface())
+			if (!reprap.UsingLinuxInterface())
 #endif
 			{
 				reprap.GetPlatform().MessageF(mtype, "Queued '%.*s' for move %" PRIu32 "\n", item->dataLength, item->data, item->executeAtMove);
 			}
 		} while ((item = item->Next()) != nullptr);
+		reprap.GetPlatform().MessageF(mtype, "%d of %d codes have been queued.\n", queueLength, maxQueuedCodes);
 	}
 }
 
@@ -259,16 +245,16 @@ void GCodeQueue::Diagnostics(MessageType mtype) noexcept
 
 void QueuedCode::AssignFrom(GCodeBuffer &gb) noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	isBinary = gb.IsBinary();
 #endif
-	dataLength = min<size_t>(gb.DataLength(), sizeof(data));
-	memcpy(data, gb.DataStart(), dataLength);
+	memcpy(data, gb.DataStart(), gb.DataLength());
+	dataLength = gb.DataLength();
 }
 
 void QueuedCode::AssignTo(GCodeBuffer *gb) noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	if (isBinary)
 	{
 		// Note that the data has to remain on a 4-byte boundary for this to work

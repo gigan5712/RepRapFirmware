@@ -16,7 +16,6 @@
 #include <CAN/CanInterface.h>
 #include <CanMessageFormats.h>
 #include <CanMessageBuffer.h>
-#include <CanMessageGenericTables.h>
 
 // Static variables used only during tuning
 uint32_t RemoteHeater::timeSetHeating;
@@ -152,7 +151,7 @@ void RemoteHeater::Spin() noexcept
 						CalculateModel(fanOffParams);
 						if (tuningFans.IsEmpty())
 						{
-							SetAndReportModelAfterTuning(false);
+							SetAndReportModel(false);
 							StopTuning();
 							break;
 						}
@@ -182,7 +181,7 @@ void RemoteHeater::Spin() noexcept
 					{
 						reprap.GetFansManager().SetFansValue(tuningFans, 0.0);					// turn fans off
 						CalculateModel(fanOnParams);
-						SetAndReportModelAfterTuning(true);
+						SetAndReportModel(true);
 						StopTuning();
 						break;
 					}
@@ -235,10 +234,9 @@ void RemoteHeater::SwitchOff() noexcept
 	}
 	else
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		auto msg = buf->SetupRequestMessage<CanMessageSetHeaterTemperature>(rid, CanInterface::GetCanAddress(), boardAddress);
 		msg->heaterNumber = GetHeaterNumber();
-		msg->isBedOrChamber = reprap.GetHeat().IsBedOrChamberHeater(GetHeaterNumber());
 		msg->setPoint = GetTargetTemperature();
 		msg->command = CanMessageSetHeaterTemperature::commandOff;
 		String<StringLength100> reply;
@@ -258,10 +256,9 @@ GCodeResult RemoteHeater::ResetFault(const StringRef& reply) noexcept
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageSetHeaterTemperature>(rid, CanInterface::GetCanAddress(), boardAddress);
 	msg->heaterNumber = GetHeaterNumber();
-	msg->isBedOrChamber = reprap.GetHeat().IsBedOrChamberHeater(GetHeaterNumber());
 	msg->setPoint = GetTargetTemperature();
 	msg->command = CanMessageSetHeaterTemperature::commandResetFault;
 	return CanInterface::SendRequestAndGetStandardReply(buf, rid, reply);
@@ -338,7 +335,7 @@ void RemoteHeater::FeedForwardAdjustment(float fanPwmChange, float extrusionChan
 	}
 	else
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		auto msg = buf->SetupRequestMessage<CanMessageHeaterFeedForward>(rid, CanInterface::GetCanAddress(), boardAddress);
 		msg->heaterNumber = GetHeaterNumber();
 		msg->fanPwmAdjustment = fanPwmChange;
@@ -356,10 +353,9 @@ void RemoteHeater::Suspend(bool sus) noexcept
 	CanMessageBuffer * const buf = CanMessageBuffer::Allocate();
 	if (buf != nullptr)
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		auto msg = buf->SetupRequestMessage<CanMessageSetHeaterTemperature>(rid, CanInterface::GetCanAddress(), boardAddress);
 		msg->heaterNumber = GetHeaterNumber();
-		msg->isBedOrChamber = reprap.GetHeat().IsBedOrChamberHeater(GetHeaterNumber());
 		msg->setPoint = GetTargetTemperature();
 		msg->command = (sus) ? CanMessageSetHeaterTemperature::commandSuspend : CanMessageSetHeaterTemperature::commandUnsuspend;
 		String<1> dummy;
@@ -367,7 +363,7 @@ void RemoteHeater::Suspend(bool sus) noexcept
 	}
 }
 
-HeaterMode RemoteHeater::GetMode() const noexcept
+Heater::HeaterMode RemoteHeater::GetMode() const noexcept
 {
 	return (tuningState != TuningState::notTuning) ? HeaterMode::tuning0
 		: (millis() - whenLastStatusReceived < RemoteStatusTimeout) ? lastMode
@@ -384,10 +380,9 @@ GCodeResult RemoteHeater::SwitchOn(const StringRef& reply) noexcept
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageSetHeaterTemperature>(rid, CanInterface::GetCanAddress(), boardAddress);
 	msg->heaterNumber = GetHeaterNumber();
-	msg->isBedOrChamber = reprap.GetHeat().IsBedOrChamberHeater(GetHeaterNumber());
 	msg->setPoint = GetTargetTemperature();
 	msg->command = CanMessageSetHeaterTemperature::commandOn;
 	const GCodeResult rslt = CanInterface::SendRequestAndGetStandardReply(buf, rid, reply);
@@ -403,11 +398,11 @@ GCodeResult RemoteHeater::SwitchOn(const StringRef& reply) noexcept
 // This is called when the heater model has been updated
 GCodeResult RemoteHeater::UpdateModel(const StringRef& reply) noexcept
 {
-	CanMessageBuffer * const buf = CanMessageBuffer::Allocate();
+	CanMessageBuffer *buf = CanMessageBuffer::Allocate();
 	if (buf != nullptr)
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
-		CanMessageHeaterModelNewNew * const msg = buf->SetupRequestMessage<CanMessageHeaterModelNewNew>(rid, CanInterface::GetCanAddress(), boardAddress);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
+		CanMessageUpdateHeaterModelNew * const msg = buf->SetupRequestMessage<CanMessageUpdateHeaterModelNew>(rid, CanInterface::GetCanAddress(), boardAddress);
 		GetModel().SetupCanMessage(GetHeaterNumber(), *msg);
 		return CanInterface::SendRequestAndGetStandardReply(buf, rid, reply);
 	}
@@ -418,10 +413,10 @@ GCodeResult RemoteHeater::UpdateModel(const StringRef& reply) noexcept
 
 GCodeResult RemoteHeater::UpdateFaultDetectionParameters(const StringRef& reply) noexcept
 {
-	CanMessageBuffer *const buf = CanMessageBuffer::Allocate();
+	CanMessageBuffer *buf = CanMessageBuffer::Allocate();
 	if (buf != nullptr)
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		CanMessageSetHeaterFaultDetectionParameters * const msg = buf->SetupRequestMessage<CanMessageSetHeaterFaultDetectionParameters>(rid, CanInterface::GetCanAddress(), boardAddress);
 		msg->heater = GetHeaterNumber();
 		msg->maxFaultTime = GetMaxHeatingFaultTime();
@@ -435,10 +430,10 @@ GCodeResult RemoteHeater::UpdateFaultDetectionParameters(const StringRef& reply)
 
 GCodeResult RemoteHeater::UpdateHeaterMonitors(const StringRef& reply) noexcept
 {
-	CanMessageBuffer * const buf = CanMessageBuffer::Allocate();
+	CanMessageBuffer *buf = CanMessageBuffer::Allocate();
 	if (buf != nullptr)
 	{
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		CanMessageSetHeaterMonitors * const msg = buf->SetupRequestMessage<CanMessageSetHeaterMonitors>(rid, CanInterface::GetCanAddress(), boardAddress);
 		msg->heater = GetHeaterNumber();
 		msg->numMonitors = MaxMonitorsPerHeater;
@@ -463,7 +458,7 @@ void RemoteHeater::UpdateRemoteStatus(CanAddress src, const CanHeaterReport& rep
 	{
 		lastMode = (HeaterMode)report.mode;
 		averagePwm = report.averagePwm;
-		lastTemperature = report.GetTemperature();
+		lastTemperature = report.temperature;
 		whenLastStatusReceived = millis();
 	}
 }
@@ -495,7 +490,7 @@ GCodeResult RemoteHeater::SendTuningCommand(const StringRef& reply, bool on) noe
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageHeaterTuningCommand>(rid, CanInterface::GetCanAddress(), boardAddress);
 	msg->heaterNumber = GetHeaterNumber();
 	msg->on = on;
@@ -516,17 +511,6 @@ void RemoteHeater::StopTuning() noexcept
 		reprap.GetPlatform().MessageF(ErrorMessage, "DANGER! Failed to stop tuning heater %u on CAN board %u, suggest turn power off\n", GetHeaterNumber(), boardAddress);
 	}
 }
-
-#if SUPPORT_REMOTE_COMMANDS
-
-// This should never be called
-GCodeResult RemoteHeater::TuningCommand(const CanMessageHeaterTuningCommand& msg, const StringRef& reply) noexcept
-{
-	reply.copy("not supported on remote heaters");
-	return GCodeResult::error;
-}
-
-#endif
 
 #endif
 

@@ -10,8 +10,6 @@
 
 #include "ZLeadscrewKinematics.h"
 
-#if SUPPORT_SCARA
-
 // Standard setup for SCARA machines assumed by this firmware
 // The X motor output drives the proximal arm joint, unless remapped using M584
 // The Y motor output drives the distal arm joint, unless remapped using M584
@@ -32,15 +30,18 @@ public:
 	bool Configure(unsigned int mCode, GCodeBuffer& gb, const StringRef& reply, bool& error) THROWS(GCodeException) override;
 	bool CartesianToMotorSteps(const float machinePos[], const float stepsPerMm[], size_t numVisibleAxes, size_t numTotalAxes, int32_t motorPos[], bool isCoordinated) const noexcept override;
 	void MotorStepsToCartesian(const int32_t motorPos[], const float stepsPerMm[], size_t numVisibleAxes, size_t numTotalAxes, float machinePos[]) const noexcept override;
-	bool IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept override;
+	bool IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept override;
 	LimitPositionResult LimitPosition(float finalCoords[], const float * null initialCoords, size_t numAxes, AxesBitmap axesToLimit, bool isCoordinated, bool applyM208Limits) const noexcept override;
 	void GetAssumedInitialPosition(size_t numAxes, float positions[]) const noexcept override;
+	size_t NumHomingButtons(size_t numVisibleAxes) const noexcept override;
+	const char* HomingButtonNames() const noexcept override { return "PDZUVWABC"; }
 	HomingMode GetHomingMode() const noexcept override { return HomingMode::homeIndividualMotors; }
 	AxesBitmap AxesAssumedHomed(AxesBitmap g92Axes) const noexcept override;
 	AxesBitmap MustBeHomedAxes(AxesBitmap axesMoving, bool disallowMovesBeforeHoming) const noexcept override;
 	AxesBitmap GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap alreadyHomed, size_t numVisibleAxes, const StringRef& filename) const noexcept override;
 	bool QueryTerminateHomingMove(size_t axis) const noexcept override;
 	void OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const noexcept override;
+	void LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept override;
 	bool IsContinuousRotationAxis(size_t axis) const noexcept override;
 	AxesBitmap GetLinearAxes() const noexcept override;
 
@@ -84,7 +85,5 @@ private:
 	mutable float cachedX, cachedY, cachedTheta, cachedPsi;
 	mutable bool currentArmMode, cachedArmMode;
 };
-
-#endif // SUPPORT_SCARA
 
 #endif /* SRC_MOVEMENT_KINEMATICS_SCARAKINEMATICS_H_ */

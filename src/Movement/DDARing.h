@@ -29,7 +29,7 @@ public:
 	bool AddAsyncMove(const AsyncMove& nextMove) noexcept;
 #endif
 
-	uint32_t Spin(SimulationMode simulationMode, bool waitingForSpace, bool shouldStartMove) noexcept SPEED_CRITICAL;	// Try to process moves in the ring
+	void Spin(uint8_t simulationMode, bool shouldStartMove) noexcept SPEED_CRITICAL;	// Try to process moves in the ring
 	bool IsIdle() const noexcept;														// Return true if this DDA ring is idle
 	uint32_t GetGracePeriod() const noexcept { return gracePeriod; }					// Return the minimum idle time, before we should start a move. Better to have a few moves in the queue so that we can do lookahead
 
@@ -41,7 +41,7 @@ public:
 	void CurrentMoveCompleted() noexcept SPEED_CRITICAL;								// Signal that the current move has just been completed
 
 	uint32_t ExtruderPrintingSince() const noexcept { return extrudersPrintingSince; }	// When we started doing normal moves after the most recent extruder-only move
-	int32_t GetAccumulatedMovement(size_t drive, bool& isPrinting) noexcept;
+	int32_t GetAccumulatedExtrusion(size_t extruder, size_t drive, bool& isPrinting) noexcept;
 
 	uint32_t GetScheduledMoves() const noexcept { return scheduledMoves; }				// How many moves have been scheduled?
 	uint32_t GetCompletedMoves() const noexcept { return completedMoves; }				// How many moves have been completed?
@@ -56,10 +56,10 @@ public:
 
 	DDA *GetCurrentDDA() const noexcept { return currentDda; }							// Return the DDA of the currently-executing move, or nullptr
 
-	float GetRequestedSpeedMmPerSec() const noexcept;
-	float GetTopSpeedMmPerSec() const noexcept;
-	float GetAccelerationMmPerSecSquared() const noexcept;
-	float GetDecelerationMmPerSecSquared() const noexcept;
+	float GetRequestedSpeed() const noexcept;
+	float GetTopSpeed() const noexcept;
+	float GetAcceleration() const noexcept;
+	float GetDeceleration() const noexcept;
 
 	int32_t GetEndPoint(size_t drive) const noexcept { return liveEndPoints[drive]; } 	// Get the current position of a motor
 	void GetCurrentMachinePosition(float m[MaxAxes], bool disableMotorMapping) const noexcept; // Get the current position in untransformed coords
@@ -87,11 +87,7 @@ public:
 	GCodeResult ConfigureMovementQueue(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
 
 #if SUPPORT_REMOTE_COMMANDS
-# if USE_REMOTE_INPUT_SHAPING
-	void AddShapedMoveFromRemote(const CanMessageMovementLinearShaped& msg) noexcept;	// add a move from the ATE to the movement queue
-# else
 	void AddMoveFromRemote(const CanMessageMovementLinear& msg) noexcept;				// add a move from the ATE to the movement queue
-# endif
 #endif
 
 protected:
@@ -99,7 +95,7 @@ protected:
 
 private:
 	bool StartNextMove(Platform& p, uint32_t startTime) noexcept SPEED_CRITICAL;		// Start the next move, returning true if laser or IObits need to be controlled
-	uint32_t PrepareMoves(DDA *firstUnpreparedMove, int32_t moveTimeLeft, unsigned int alreadyPrepared, SimulationMode simulationMode) noexcept;
+	void PrepareMoves(DDA *firstUnpreparedMove, int32_t moveTimeLeft, unsigned int alreadyPrepared, uint8_t simulationMode) noexcept;
 
 	static void TimerCallback(CallbackParameter p) noexcept;
 
@@ -127,7 +123,8 @@ private:
 	unsigned int stepErrors;													// count of step errors, for diagnostics
 
 	float simulationTime;														// Print time since we started simulating
-	volatile int32_t movementAccumulators[MaxAxesPlusExtruders]; 				// Accumulated motor steps, used by filament monitors
+	float extrusionPending[MaxExtruders];										// Extrusion not done due to rounding to nearest step
+	volatile int32_t extrusionAccumulators[MaxExtruders]; 						// Accumulated extruder motor steps
 	volatile uint32_t extrudersPrintingSince;									// The milliseconds clock time when extrudersPrinting was set to true
 
 	volatile bool extrudersPrinting;											// Set whenever an extruder starts a printing move, cleared by a non-printing extruder move

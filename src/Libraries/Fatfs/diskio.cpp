@@ -41,8 +41,6 @@
  *
  */
 
-#include <ecv_duet3d.h>
-
 #include "compiler.h"
 #include "diskio.h"
 
@@ -69,14 +67,14 @@ unsigned int DiskioGetAndClearMaxRetryCount() noexcept
 
 float DiskioGetAndClearLongestReadTime() noexcept
 {
-	const float ret = (float)longestReadTime * StepClocksToMillis;
+	const float ret = (float)longestReadTime * StepTimer::StepClocksToMillis;
 	longestReadTime = 0;
 	return ret;
 }
 
 float DiskioGetAndClearLongestWriteTime() noexcept
 {
-	const float ret = (float)longestWriteTime * StepClocksToMillis;
+	const float ret = (float)longestWriteTime * StepTimer::StepClocksToMillis;
 	longestWriteTime = 0;
 	return ret;
 }

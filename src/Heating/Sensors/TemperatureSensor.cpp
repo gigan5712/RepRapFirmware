@@ -92,7 +92,7 @@ void TemperatureSensor::SetSensorName(const char *newName) noexcept
 }
 
 // Default implementation of Configure, for sensors that have no configurable parameters
-GCodeResult TemperatureSensor::Configure(GCodeBuffer& gb, const StringRef& reply, bool& changed) THROWS(GCodeException)
+GCodeResult TemperatureSensor::Configure(GCodeBuffer& gb, const StringRef& reply, bool& changed)
 {
 	TryConfigureSensorName(gb, changed);
 	if (!changed && !gb.Seen('Y'))
@@ -129,7 +129,7 @@ void TemperatureSensor::CopyBasicDetails(const StringRef& reply) const noexcept
 }
 
 // Configure then heater name, if it is provided
-void TemperatureSensor::TryConfigureSensorName(GCodeBuffer& gb, bool& seen) THROWS(GCodeException)
+void TemperatureSensor::TryConfigureSensorName(GCodeBuffer& gb, bool& seen)
 {
 	String<MaxHeaterNameLength> buf;
 	bool localSeen = false;
@@ -203,7 +203,6 @@ TemperatureSensor *TemperatureSensor::Create(unsigned int sensorNum, const char 
 	{
 		ts = new LinearAnalogSensor(sensorNum);
 	}
-#if SUPPORT_SPI_SENSORS
 	else if (ReducedStringEquals(typeName, ThermocoupleSensor31855::TypeName))
 	{
 		ts = new ThermocoupleSensor31855(sensorNum);
@@ -220,8 +219,11 @@ TemperatureSensor *TemperatureSensor::Create(unsigned int sensorNum, const char 
 	{
 		ts = new CurrentLoopTemperatureSensor(sensorNum);
 	}
-#endif
 #if SUPPORT_DHT_SENSOR
+	else if (ReducedStringEquals(typeName, DhtTemperatureSensor::TypeNameDht11))
+	{
+		ts = new DhtTemperatureSensor(sensorNum, DhtSensorType::Dht11);
+	}
 	else if (ReducedStringEquals(typeName, DhtTemperatureSensor::TypeNameDht21))
 	{
 		ts = new DhtTemperatureSensor(sensorNum, DhtSensorType::Dht21);

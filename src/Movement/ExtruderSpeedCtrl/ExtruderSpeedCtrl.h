@@ -11,6 +11,15 @@
 #include <Endstops/ZProbe.h>
 #include <Movement/StepTimer.h>
 
+const size_t ExtruderPortNumber_OutEnable 	= 2;	// to PoStep
+const size_t ExtruderPortNumber_OutDir 		= 6;	// to PoStep
+const size_t ExtruderPortNumber_OutIsEnabled = 4; 	// to Omnicore
+const size_t ExtruderPortNumber_InEnable 	= 4;	// from Omnicore
+const size_t ExtruderPortNumber_OutErr 		= 5;	// to Omnicore
+const size_t ExtruderPortNumber_InDir 		= 5;	// from Omnicore
+const size_t ExtruderPortNumber_InErr 		= 8;	// from PoStep
+const size_t ExtruderPortNumber_OutPulses 	= 8;	// to PoStep
+
 class ExtruderSpeedCtrl
 {
 public:
@@ -19,20 +28,25 @@ public:
 	ExtruderSpeedCtrl() noexcept;
 	~ExtruderSpeedCtrl() noexcept;
 
-	void SetIREmitter(bool on) const noexcept;
 	uint16_t GetRawReading() const noexcept;
 	void Configure() noexcept;
-	void InitStepTime() noexcept;
-
+	void SetScale(uint16_t RecScale) {Scale = RecScale;}
+	uint16_t GetScale() {return Scale;}
+	StepTimer::Ticks InitStepTime() noexcept;
+	void SetConstantSpeed(uint16_t RecSpeed) noexcept;
 	void StepStepper() noexcept;
+	void StepUp() noexcept;
+	void StepDown() noexcept;
 	void Start() noexcept;
 
 
 private:
-	IoPort inputPort;
+	IoPort ProbePort;
 	IoPort modulationPort;			// the modulation port we are using
 	PwmPort port;
 	IoPort tachoPort;										// port used to read the tacho
+	uint16_t Speed=0;
+	uint16_t Scale=1;
 
 	// Variable for programming Smart Effector and other programmable Z probes
 	static void TimerInterrupt(CallbackParameter param) noexcept;
@@ -46,7 +60,7 @@ private:
 	StepTimer timer;
 	StepTimer::Ticks startTime;
 	StepTimer::Ticks StepstartTime;
-	StepTimer::Ticks ExtruderStepTime;
+	StepTimer::Ticks NextStepTime;
 	StepTimer::Ticks PulseDuration;
 	StepTimer::Ticks lastStepLowTime;
 	bool StepDir=false;

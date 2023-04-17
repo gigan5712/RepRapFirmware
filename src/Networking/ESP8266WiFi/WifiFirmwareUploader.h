@@ -10,14 +10,12 @@
 
 #include "RepRapFirmware.h"
 
-#if HAS_WIFI_NETWORKING
-
 class WiFiInterface;
 
 class WifiFirmwareUploader
 {
 public:
-	WifiFirmwareUploader(AsyncSerial& port, WiFiInterface &iface) noexcept;
+	WifiFirmwareUploader(UARTClass& port, WiFiInterface &iface) noexcept;
 	bool IsReady() const noexcept;
 	void SendUpdateFile(const char *file, uint32_t address) noexcept;
 	void Spin() noexcept;
@@ -86,7 +84,7 @@ private:
 	EspUploadResult flashWriteBlock(uint16_t flashParmVal, uint16_t flashParmMask) noexcept;
 	EspUploadResult DoErase(uint32_t address, uint32_t size) noexcept;
 
-	AsyncSerial& uploadPort;
+	UARTClass& uploadPort;
 	WiFiInterface& interface;
 	FileStore *uploadFile;
 	FilePosition fileSize;
@@ -100,7 +98,5 @@ private:
 	EspUploadResult uploadResult;
 	int restartModeOnCompletion;
 };
-
-#endif	// HAS_WIFI_NETWORKING
 
 #endif /* SRC_SAME70_WIFIFIRMWAREUPLOADER_H_ */

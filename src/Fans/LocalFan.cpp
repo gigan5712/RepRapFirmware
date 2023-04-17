@@ -38,11 +38,11 @@ LocalFan::~LocalFan() noexcept
 GCodeResult LocalFan::ReportPortDetails(const StringRef& str) const noexcept
 {
 	str.printf("Fan %u", fanNumber);
-	port.AppendFullDetails(str);
+	port.AppendDetails(str);
 	if (tachoPort.IsValid())
 	{
 		str.cat(" tacho");
-		tachoPort.AppendBasicDetails(str);
+		tachoPort.AppendDetails(str);
 	}
 	return GCodeResult::ok;
 }
@@ -70,10 +70,13 @@ void LocalFan::SetHardwarePwm(float pwmVal) noexcept
 void LocalFan::InternalRefresh(bool checkSensors) noexcept
 {
 	float reqVal;
+#if HAS_SMART_DRIVERS
+	DriverChannelsBitmap driverChannelsMonitored;
+#endif
 
 	if (sensorsMonitored.IsEmpty())
 	{
-		reqVal = (val <= 0.0) ? 0.0 : max<float>(val * maxVal, minVal);		// scale the requested PWM by the maximum, enforce the minimum
+		reqVal = val;
 	}
 	else if (!checkSensors)
 	{
@@ -84,7 +87,11 @@ void LocalFan::InternalRefresh(bool checkSensors) noexcept
 		reqVal = 0.0;
 		const bool bangBangMode = (triggerTemperatures[1] <= triggerTemperatures[0]);
 		sensorsMonitored.Iterate
-		([&reqVal, bangBangMode, this](unsigned int sensorNum, unsigned int) noexcept
+		([&reqVal, bangBangMode, this
+#if HAS_SMART_DRIVERS
+		  , &driverChannelsMonitored
+#endif
+		 ](unsigned int sensorNum, unsigned int) noexcept
 			{
 				const auto sensor = reprap.GetHeat().FindSensor(sensorNum);
 				if (sensor.IsNotNull())
@@ -94,25 +101,25 @@ void LocalFan::InternalRefresh(bool checkSensors) noexcept
 					const TemperatureError err = sensor->GetLatestTemperature(ht);
 					if (err != TemperatureError::success || ht < BadLowTemperature || ht >= triggerTemperatures[1])
 					{
-						reqVal = maxVal;
+						reqVal = max<float>(reqVal, (bangBangMode) ? max<float>(0.5, val) : 1.0);
 					}
-					else if (!bangBangMode && ht >= triggerTemperatures[0])
+					else if (!bangBangMode && ht > triggerTemperatures[0])
 					{
 						// We already know that ht < triggerTemperatures[1], therefore unless we have NaNs it is safe to divide by (triggerTemperatures[1] - triggerTemperatures[0])
-						const float newVal = minVal + (maxVal - minVal) * (ht - triggerTemperatures[0])/(triggerTemperatures[1] - triggerTemperatures[0]);
-						if (newVal > reqVal)
-						{
-							reqVal = newVal;
-						}
+						reqVal = max<float>(reqVal, (ht - triggerTemperatures[0])/(triggerTemperatures[1] - triggerTemperatures[0]));
 					}
 					else if (lastVal > 0.0 && ht + ThermostatHysteresis > triggerTemperatures[0])		// if the fan is on, add a hysteresis before turning it off
 					{
-						const float newVal = (bangBangMode) ? maxVal : minVal;
-						if (newVal > reqVal)
-						{
-							reqVal = newVal;
-						}
+						const float minFanSpeed = (bangBangMode) ? max<float>(0.5, val) : minVal;
+						reqVal = constrain<float>(reqVal, minFanSpeed, maxVal);
 					}
+#if HAS_SMART_DRIVERS
+					const int channel = sensor->GetSmartDriversChannel();
+					if (channel >= 0)
+					{
+						driverChannelsMonitored.SetBit((unsigned int)channel);
+					}
+#endif
 				}
 			}
 		);
@@ -120,9 +127,16 @@ void LocalFan::InternalRefresh(bool checkSensors) noexcept
 
 	if (reqVal > 0.0)
 	{
+		reqVal = max<float>(reqVal * maxVal, minVal);		// scale the requested PWM by the maximum, enforce the minimum
 		if (lastVal <= 0.0)
 		{
 			// We are turning this fan on
+#if HAS_SMART_DRIVERS
+			if (driverChannelsMonitored.IsNonEmpty())
+			{
+				reprap.GetPlatform().DriverCoolingFansOnOff(driverChannelsMonitored, true);		// tell Platform that we have started a fan that cools drivers
+			}
+#endif
 			if (reqVal < 1.0 && blipTime != 0)
 			{
 				// Starting the fan from standstill, so blip the fan
@@ -138,6 +152,12 @@ void LocalFan::InternalRefresh(bool checkSensors) noexcept
 	else
 	{
 		blipping = false;
+#if HAS_SMART_DRIVERS
+		if (driverChannelsMonitored.IsNonEmpty() && lastVal > 0.0)
+		{
+			reprap.GetPlatform().DriverCoolingFansOnOff(driverChannelsMonitored, false);	// tell Platform that we have stopped a fan that cools drivers
+		}
+#endif
 	}
 
 	lastVal = reqVal;
@@ -180,7 +200,7 @@ bool LocalFan::AssignPorts(const char *pinNames, const StringRef& reply) noexcep
 	// Tacho initialisation
 	if (tachoPort.IsValid())
 	{
-		tachoPort.AttachInterrupt(FanInterrupt, InterruptMode::falling, CallbackParameter(this));
+		tachoPort.AttachInterrupt(FanInterrupt, InterruptMode::falling, this);
 	}
 
 	InternalRefresh(true);
@@ -195,8 +215,8 @@ int32_t LocalFan::GetRPM() const noexcept
 	// When the fan stops, we get no interrupts and fanInterval stops getting updated. We must recognise this and return zero.
 	return (!tachoPort.IsValid())
 			? -1																			// we return -1 if there is no tacho configured
-			: (fanInterval != 0 && StepTimer::GetTimerTicks() - fanLastResetTime < 3 * StepClockRate)	// if we have a reading and it is less than 3 seconds old
-			  ? (StepClockRate * fanMaxInterruptCount * (60/2))/fanInterval					// then calculate RPM assuming 2 interrupts per rev
+			: (fanInterval != 0 && StepTimer::GetTimerTicks() - fanLastResetTime < 3 * StepTimer::StepClockRate)	// if we have a reading and it is less than 3 seconds old
+			  ? (StepTimer::StepClockRate * fanMaxInterruptCount * (60/2))/fanInterval		// then calculate RPM assuming 2 interrupts per rev
 			  : 0;																			// else assume fan is off or tacho not connected
 }
 

@@ -25,7 +25,7 @@ constexpr ObjectModelTableEntry Fan::objectModelTable[] =
 	// 0. Fan members
 	{ "actualValue",		OBJECT_MODEL_FUNC(self->GetPwm(), 2), 															ObjectModelEntryFlags::live },
 	{ "blip",				OBJECT_MODEL_FUNC(0.001f * (float)self->blipTime, 2), 											ObjectModelEntryFlags::none },
-	{ "frequency",			OBJECT_MODEL_FUNC((int32_t)self->GetPwmFrequency()), 											ObjectModelEntryFlags::none },
+	// TODO add frequency here
 	{ "max",				OBJECT_MODEL_FUNC(self->maxVal, 2), 															ObjectModelEntryFlags::none },
 	{ "min",				OBJECT_MODEL_FUNC(self->minVal, 2), 															ObjectModelEntryFlags::none },
 	{ "name",				OBJECT_MODEL_FUNC(self->name.c_str()), 															ObjectModelEntryFlags::none },
@@ -39,7 +39,7 @@ constexpr ObjectModelTableEntry Fan::objectModelTable[] =
 	{ "lowTemperature",		OBJECT_MODEL_FUNC_IF(self->sensorsMonitored.IsNonEmpty(), self->triggerTemperatures[0], 1), 	ObjectModelEntryFlags::none },
 };
 
-constexpr uint8_t Fan::objectModelTableDescriptor[] = { 2, 9, 3 };
+constexpr uint8_t Fan::objectModelTableDescriptor[] = { 2, 8, 3 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(Fan)
 
@@ -160,11 +160,8 @@ bool Fan::Configure(unsigned int mcode, size_t fanNum, GCodeBuffer& gb, const St
 			{
 				reply.catf(" (%s)", name.c_str());
 			}
-			if (sensorsMonitored.IsEmpty())
-			{
-				reply.catf(", speed %d%%", (int)(val * 100.0));
-			}
-			reply.catf(", min: %d%%, max: %d%%, blip: %.2f",
+			reply.catf(", speed: %d%%, min: %d%%, max: %d%%, blip: %.2f",
+						(int)(val * 100.0),
 						(int)(minVal * 100.0),
 						(int)(maxVal * 100.0),
 						(double)(blipTime * MillisToSeconds)
@@ -197,25 +194,7 @@ GCodeResult Fan::SetPwm(float speed, const StringRef& reply) noexcept
 	return Refresh(reply);
 }
 
-#if SUPPORT_REMOTE_COMMANDS
-
-// Set the parameters for this fan
-GCodeResult Fan::Configure(const CanMessageFanParameters& msg, const StringRef& reply) noexcept
-{
-	triggerTemperatures[0] = msg.triggerTemperatures[0];
-	triggerTemperatures[1] = msg.triggerTemperatures[1];
-	blipTime = msg.blipTime;
-	val = msg.val;
-	minVal = msg.minVal;
-	maxVal = msg.maxVal;
-	sensorsMonitored.SetFromRaw(msg.sensorsMonitored);
-	(void)UpdateFanConfiguration(reply);
-	return GCodeResult::ok;
-}
-
-#endif
-
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 // Save the settings of this fan if it isn't thermostatic
 bool Fan::WriteSettings(FileStore *f, size_t fanNum) const noexcept

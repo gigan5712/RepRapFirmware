@@ -13,25 +13,17 @@
 #include "CommandProcessor.h"
 #include "CanMessageGenericConstructor.h"
 #include <CanMessageBuffer.h>
-#include <CanMessageGenericTables.h>
 #include <Movement/DDA.h>
 #include <Movement/DriveMovement.h>
-#include <Movement/Kinematics/HangprinterKinematics.h>
 #include <Movement/StepTimer.h>
 #include <Movement/Move.h>
 #include <RTOSIface/RTOSIface.h>
 #include <Platform/TaskPriorities.h>
 #include <GCodes/GCodeException.h>
 #include <GCodes/GCodeBuffer/GCodeBuffer.h>
-#include <ClosedLoop/ClosedLoop.h>
 
-#if HAS_SBC_INTERFACE
-# include "SBC/SbcInterface.h"
-#endif
-
-#if SUPPORT_REMOTE_COMMANDS
-# include <Version.h>
-# include <InputMonitors/InputMonitor.h>
+#if HAS_LINUX_INTERFACE
+# include "Linux/LinuxInterface.h"
 #endif
 
 #include <memory>
@@ -44,17 +36,17 @@
 
 const unsigned int NumCanBuffers = 2 * MaxCanBoards + 10;
 
-constexpr uint32_t MaxMotionSendWait = 20;									// milliseconds
-constexpr uint32_t MaxUrgentSendWait = 20;									// milliseconds
-constexpr uint32_t MaxTimeSyncSendWait = 2;									// milliseconds
-constexpr uint32_t MaxResponseSendWait = CanInterface::UsualSendTimeout;	// milliseconds
-constexpr uint32_t MaxRequestSendWait = CanInterface::UsualSendTimeout;		// milliseconds
-constexpr uint16_t MaxTimeSyncDelay = 300;									// the maximum normal delay before a CAN time sync message is sent
+constexpr uint32_t MaxMotionSendWait = 20;		// milliseconds
+constexpr uint32_t MaxUrgentSendWait = 20;		// milliseconds
+constexpr uint32_t MaxTimeSyncSendWait = 2;		// milliseconds
+constexpr uint32_t MaxResponseSendWait = 200;	// milliseconds
+constexpr uint32_t MaxRequestSendWait = 200;	// milliseconds
+constexpr uint16_t MaxTimeSyncDelay = 300;		// the maximum normal delay before a can time sync message is sent
 
 #define USE_BIT_RATE_SWITCH		0
 #define USE_TX_FIFO				1
 
-constexpr uint32_t MinBitRate = 15;											// MCP2542 has a minimum bite rate of 14.4kbps
+constexpr uint32_t MinBitRate = 15;				// MCP2542 has a minimum bite rate of 14.4kbps
 constexpr uint32_t MaxBitRate = 5000;
 
 constexpr float MinSamplePoint = 0.5;
@@ -65,7 +57,7 @@ constexpr float MinJumpWidth = 0.05;
 constexpr float MaxJumpWidth = 0.5;
 constexpr float DefaultJumpWidth = 0.25;
 
-constexpr const char *_ecv_array NoCanBufferMessage = "no CAN buffer available";
+constexpr const char *NoCanBufferMessage = "no CAN buffer available";
 
 static Mutex transactionMutex;
 
@@ -99,8 +91,6 @@ static uint8_t currentTimeSyncMarker = 0xFF;
 
 #if SUPPORT_REMOTE_COMMANDS
 static bool inExpansionMode = false;
-static bool inTestMode = false;
-static bool mainBoardAcknowledgedAnnounce = false;
 #endif
 
 //#define CAN_DEBUG
@@ -117,7 +107,7 @@ constexpr CanDevice::Config Can0Config =
 	.txFifoSize = 2,
 #endif
 	.numRxBuffers =  0,
-	.rxFifo0Size = 32,				// increased from 16 to help with accelerometer and closed loop data collection
+	.rxFifo0Size = 16,
 	.rxFifo1Size = 16,
 	.numShortFilterElements = 0,
 # ifdef DUET3_ATE
@@ -138,7 +128,7 @@ static CanDevice *can0dev = nullptr;
 static unsigned int txTimeouts[Can0Config.numTxBuffers + 1] = { 0 };
 static uint32_t lastCancelledId = 0;
 
-#if DUAL_CAN
+#if SAME70 && defined(DUAL_CAN)
 
 constexpr CanDevice::Config Can1Config =
 {
@@ -148,8 +138,8 @@ constexpr CanDevice::Config Can1Config =
 	.numRxBuffers =  0,
 	.rxFifo0Size = 16,
 	.rxFifo1Size = 16,
-	.numShortFilterElements = 1,
-	.numExtendedFilterElements = 1,
+	.numShortFilterElements = 0,
+	.numExtendedFilterElements = 3,
 	.txEventFifoSize = 16
 };
 
@@ -172,7 +162,7 @@ constexpr auto TxBufferIndexBroadcast = CanDevice::TxBufferNumber::buffer4;
 #if USE_TX_FIFO
 constexpr auto TxBufferIndexMotion = CanDevice::TxBufferNumber::fifo;				// we send lots of movement messages so use the FIFO for them
 #else
-constexpr auto TxBufferIndexMotion = CanDevice::TxBufferNumber::buffer5;
+constexpr auto TxBufferIndexMotion = CanDevice::TxBufferNumber::buffer5;				// we send lots of movement messages so use the FIFO for them
 #endif
 
 // Receive buffer/FIFO usage. All dedicated buffer numbers must be < Can0Config.numRxBuffers.
@@ -227,6 +217,17 @@ static void InitReceiveFilters() noexcept
 # endif
 }
 
+#if SUPPORT_REMOTE_COMMANDS
+
+static void ReInit() noexcept
+{
+	can0dev->Disable();
+	InitReceiveFilters();
+	can0dev->Enable();
+}
+
+#endif
+
 // This is the function called by the transmit event handler when the message marker is nonzero
 void TxCallback(uint8_t marker, CanId id, uint16_t timeStamp) noexcept
 {
@@ -250,11 +251,12 @@ void CanInterface::Init() noexcept
 	transactionMutex.Create("CanTrans");
 
 #if SAME70
-	SetPinFunction(APIN_CAN1_TX, CAN1TXPinPeriphMode);
-	SetPinFunction(APIN_CAN1_RX, CAN1RXPinPeriphMode);
-# if DUAL_CAN
+# ifdef USE_CAN0
 	SetPinFunction(APIN_CAN0_TX, CAN0PinPeriphMode);
 	SetPinFunction(APIN_CAN0_RX, CAN0PinPeriphMode);
+# else
+	SetPinFunction(APIN_CAN1_TX, CAN1TXPinPeriphMode);
+	SetPinFunction(APIN_CAN1_RX, CAN1RXPinPeriphMode);
 # endif
 	pmc_enable_upll_clock();			// configure_mcan sets up PCLK5 to be the UPLL divided by something, so make sure the UPLL is running
 #elif SAME5x
@@ -264,9 +266,9 @@ void CanInterface::Init() noexcept
 # error Unsupported MCU
 #endif
 
-	// Initialise the CAN hardware
+// Initialise the CAN hardware
 	CanTiming timing;
-	timing.SetDefaults_1Mb();
+	timing.SetDefaults();
 	can0dev = CanDevice::Init(0, CanDeviceNumber, Can0Config, can0Memory, timing, nullptr);
 	InitReceiveFilters();
 	can0dev->Enable();
@@ -277,14 +279,6 @@ void CanInterface::Init() noexcept
 	canClockTask.Create(CanClockLoop, "CanClock", nullptr, TaskPriority::CanClockPriority);
 	canSenderTask.Create(CanSenderLoop, "CanSender", nullptr, TaskPriority::CanSenderPriority);
 	canReceiverTask.Create(CanReceiverLoop, "CanReceiver", nullptr, TaskPriority::CanReceiverPriority);
-
-#if DUAL_CAN
-	timing.SetDefaults_250kb();
-	can1dev = CanDevice::Init(1, SecondaryCanDeviceNumber, Can1Config, can1Memory, timing, nullptr);
-	can1dev->SetShortFilterElement(0, CanDevice::RxBufferNumber::fifo0, 0, 0);			// set up a filter to receive all messages in FIFO 0
-	can1dev->SetExtendedFilterElement(0, CanDevice::RxBufferNumber::fifo0, 0, 0);
-	can1dev->Enable();
-#endif
 }
 
 void CanInterface::Shutdown() noexcept
@@ -312,73 +306,21 @@ bool CanInterface::InExpansionMode() noexcept
 	return inExpansionMode;
 }
 
-bool CanInterface::InTestMode() noexcept
-{
-	return inTestMode;
-}
-
-static void ReInit() noexcept
-{
-	can0dev->Disable();
-	InitReceiveFilters();
-	can0dev->Enable();
-}
-
-void CanInterface::SwitchToExpansionMode(CanAddress addr, bool useTestMode) noexcept
+void CanInterface::SwitchToExpansionMode(CanAddress addr) noexcept
 {
 	TaskCriticalSectionLocker lock;
 
 	myAddress = addr;
 	inExpansionMode = true;
-	inTestMode = useTestMode;
 	reprap.GetGCodes().SwitchToExpansionMode();
 	ReInit();										// reset the CAN filters to account for our new CAN address
-}
-
-// Send an announcement message if we haven't had an announce acknowledgement from a main board. On return the buffer is available to use again.
-void CanInterface::SendAnnounce(CanMessageBuffer *buf) noexcept
-{
-	if (inExpansionMode && !mainBoardAcknowledgedAnnounce)
-	{
-		auto msg = buf->SetupBroadcastMessage<CanMessageAnnounceNew>(myAddress);
-		msg->timeSinceStarted = millis();
-		msg->numDrivers = NumDirectDrivers;
-		msg->zero = 0;
-		memcpy(msg->uniqueId, reprap.GetPlatform().GetUniqueId().GetRaw(), sizeof(msg->uniqueId));
-		// Note, board type name, firmware version, firmware date and firmware time are limited to 43 characters in the new
-		// We use vertical-bar to separate the three fields: board type, firmware version, date/time
-		SafeSnprintf(msg->boardTypeAndFirmwareVersion, ARRAY_SIZE(msg->boardTypeAndFirmwareVersion), "%s|%s|%s%.6s", BOARD_SHORT_NAME, VERSION, IsoDate, TIME_SUFFIX);
-		buf->dataLength = msg->GetActualDataLength();
-		SendMessageNoReplyNoFree(buf);
-	}
-}
-
-// Send an event. The text will be truncated if it is longer than 55 characters.
-void CanInterface::RaiseEvent(EventType type, uint16_t param, uint8_t device, const char *format, va_list vargs) noexcept
-{
-	CanMessageBuffer buf(nullptr);
-	auto msg = buf.SetupStatusMessage<CanMessageEvent>(GetCanAddress(), GetCurrentMasterAddress());
-	msg->eventType = type.ToBaseType();;
-	msg->deviceNumber = device;
-	msg->eventParam = param;
-	msg->zero = 0;
-	SafeVsnprintf(msg->text, ARRAY_SIZE(msg->text), format, vargs);
-	buf.dataLength = msg->GetActualDataLength();
-	CanInterface::SendMessageNoReplyNoFree(&buf);
-}
-
-void CanInterface::MainBoardAcknowledgedAnnounce() noexcept
-{
-	mainBoardAcknowledgedAnnounce = true;
 }
 
 #endif
 
 // Allocate a CAN request ID
 // Currently we reserve the top bit of the 12-bit request ID so that CanRequestIdAcceptAlways is distinct from any genuine request ID.
-// Currently we use a single RID sequence for all destination addresses. In future we may use a separate sequence for each address.
-// The message buffer is provided so that if the board is not known, we can use the buffer to as it to announce itself
-CanRequestId CanInterface::AllocateRequestId(CanAddress destination, CanMessageBuffer *buf) noexcept
+CanRequestId CanInterface::AllocateRequestId(CanAddress destination) noexcept
 {
 	static uint16_t rid = 0;
 
@@ -420,7 +362,7 @@ uint16_t CanInterface::GetTimeStampPeriod() noexcept
 
 #endif
 
-// Send a message on the CAN FD channel and record any errors
+// Send a message on the CAN FD channel and reord any errors
 static void SendCanMessage(CanDevice::TxBufferNumber whichBuffer, uint32_t timeout, CanMessageBuffer *buffer) noexcept
 {
 	const uint32_t cancelledId = can0dev->SendMessage(whichBuffer, timeout, buffer);
@@ -437,70 +379,45 @@ extern "C" [[noreturn]] void CanSenderLoop(void *) noexcept
 {
 	for (;;)
 	{
-#if SUPPORT_REMOTE_COMMANDS
-		if (inExpansionMode)
+		TaskBase::Take(Mutex::TimeoutUnlimited);
+		for (;;)
 		{
-			// In expansion mode this task just send notifications when the states of input handles change
-			CanMessageBuffer buf(nullptr);
-			auto msg = buf.SetupStatusMessage<CanMessageInputChanged>(CanInterface::GetCanAddress(), CanInterface::GetCurrentMasterAddress());
-			msg->states = 0;
-			msg->zero = 0;
-			msg->numHandles = 0;
-
-			const uint32_t timeToWait = InputMonitor::AddStateChanges(msg);
-			if (msg->numHandles != 0)
+			CanMessageBuffer * const urgentMessage = CanMotion::GetUrgentMessage();
+			if (urgentMessage != nullptr)
 			{
-				buf.dataLength = msg->GetActualDataLength();
-				SendCanMessage(TxBufferIndexUrgent, MaxUrgentSendWait, &buf);
-				reprap.GetPlatform().OnProcessingCanMessage();
+				SendCanMessage(TxBufferIndexUrgent, MaxUrgentSendWait, urgentMessage);
 			}
-			TaskBase::Take(timeToWait);							// wait until we are woken up because a message is available, or we time out
-		}
-		else
-#endif
-		{
-			// In main board mode this task sends urgent messages concerning motion
-			for (;;)
+			else if (pendingMotionBuffers != nullptr)
 			{
-				CanMessageBuffer * const urgentMessage = CanMotion::GetUrgentMessage();
-				if (urgentMessage != nullptr)
+				CanMessageBuffer *buf;
 				{
-					SendCanMessage(TxBufferIndexUrgent, MaxUrgentSendWait, urgentMessage);
-				}
-				else if (pendingMotionBuffers != nullptr)
-				{
-					CanMessageBuffer *buf;
-					{
-						TaskCriticalSectionLocker lock;
-						buf = pendingMotionBuffers;
-						pendingMotionBuffers = buf->next;
+					TaskCriticalSectionLocker lock;
+					buf = pendingMotionBuffers;
+					pendingMotionBuffers = buf->next;
 #if 0	//unused
-						--numPendingMotionBuffers;
+					--numPendingMotionBuffers;
 #endif
-					}
+				}
 
-					// Send the message
-					SendCanMessage(TxBufferIndexMotion, MaxMotionSendWait, buf);
-					reprap.GetPlatform().OnProcessingCanMessage();
+				// Send the message
+				SendCanMessage(TxBufferIndexMotion, MaxMotionSendWait, buf);
 
 #ifdef CAN_DEBUG
-					// Display a debug message too
-					debugPrintf("CCCR %08" PRIx32 ", PSR %08" PRIx32 ", ECR %08" PRIx32 ", TXBRP %08" PRIx32 ", TXBTO %08" PRIx32 ", st %08" PRIx32 "\n",
-								MCAN1->MCAN_CCCR, MCAN1->MCAN_PSR, MCAN1->MCAN_ECR, MCAN1->MCAN_TXBRP, MCAN1->MCAN_TXBTO, GetAndClearStatusBits());
-					buf->msg.DebugPrint();
-					delay(50);
-					debugPrintf("CCCR %08" PRIx32 ", PSR %08" PRIx32 ", ECR %08" PRIx32 ", TXBRP %08" PRIx32 ", TXBTO %08" PRIx32 ", st %08" PRIx32 "\n",
-								MCAN1->MCAN_CCCR, MCAN1->MCAN_PSR, MCAN1->MCAN_ECR, MCAN1->MCAN_TXBRP, MCAN1->MCAN_TXBTO, GetAndClearStatusBits());
+				// Display a debug message too
+				debugPrintf("CCCR %08" PRIx32 ", PSR %08" PRIx32 ", ECR %08" PRIx32 ", TXBRP %08" PRIx32 ", TXBTO %08" PRIx32 ", st %08" PRIx32 "\n",
+							MCAN1->MCAN_CCCR, MCAN1->MCAN_PSR, MCAN1->MCAN_ECR, MCAN1->MCAN_TXBRP, MCAN1->MCAN_TXBTO, GetAndClearStatusBits());
+				buf->msg.DebugPrint();
+				delay(50);
+				debugPrintf("CCCR %08" PRIx32 ", PSR %08" PRIx32 ", ECR %08" PRIx32 ", TXBRP %08" PRIx32 ", TXBTO %08" PRIx32 ", st %08" PRIx32 "\n",
+							MCAN1->MCAN_CCCR, MCAN1->MCAN_PSR, MCAN1->MCAN_ECR, MCAN1->MCAN_TXBRP, MCAN1->MCAN_TXBTO, GetAndClearStatusBits());
 #endif
-					// Free the message buffer.
-					CanMessageBuffer::Free(buf);
-				}
-				else
-				{
-					break;
-				}
+				// Free the message buffer.
+				CanMessageBuffer::Free(buf);
 			}
-			TaskBase::Take(Mutex::TimeoutUnlimited);
+			else
+			{
+				break;
+			}
 		}
 	}
 }
@@ -513,75 +430,70 @@ extern "C" [[noreturn]] void CanClockLoop(void *) noexcept
 
 	for (;;)
 	{
-		CanMessageTimeSync * const msg = buf.SetupBroadcastMessage<CanMessageTimeSync>(CanInterface::GetCanAddress());
-		msg->lastTimeSent = lastTimeSent;
-		msg->lastTimeAcknowledgeDelay = 0;									// assume we don't have the transmit delay available
-
-		currentTimeSyncMarker = ((currentTimeSyncMarker + 1) & 0x0F) | 0xA0;
-		buf.marker = currentTimeSyncMarker;
-		buf.reportInFifo = 1;
-
-		if (gotTimeSyncTxTimeStamp)
+#if SUPPORT_REMOTE_COMMANDS
+		if (!inExpansionMode)
+#endif
 		{
+			CanMessageTimeSync * const msg = buf.SetupBroadcastMessage<CanMessageTimeSync>(CanInterface::GetCanAddress());
+			msg->lastTimeSent = lastTimeSent;
+			msg->lastTimeAcknowledgeDelay = 0;									// assume we don't have the transmit delay available
+
+			currentTimeSyncMarker = ((currentTimeSyncMarker + 1) & 0x0F) | 0xA0;
+			buf.marker = currentTimeSyncMarker;
+			buf.reportInFifo = 1;
+
+			if (gotTimeSyncTxTimeStamp)
+			{
 # if SAME70
-			// On the SAME70 the step clock is also the external time stamp counter
-			const uint32_t timeSyncTxDelay = (timeSyncTxTimeStamp - (uint16_t)lastTimeSent) & 0xFFFF;
+				// On the SAME70 the step clock is also the external time stamp counter
+				const uint32_t timeSyncTxDelay = (timeSyncTxTimeStamp - (uint16_t)lastTimeSent) & 0xFFFF;
 # else
-			// On the SAME5x the time stamp counter counts CAN bit times divided by 64
-			const uint32_t timeSyncTxDelay = (((timeSyncTxTimeStamp - lastTimeSyncTxPreparedStamp) & 0xFFFF) * CanInterface::GetTimeStampPeriod()) >> 6;
+				// On the SAME5x the time stamp counter counts CAN bit times divided by 64
+				const uint32_t timeSyncTxDelay = (((timeSyncTxTimeStamp - lastTimeSyncTxPreparedStamp) & 0xFFFF) * CanInterface::GetTimeStampPeriod()) >> 6;
 # endif
-			if (timeSyncTxDelay > peakTimeSyncTxDelay)
-			{
-				peakTimeSyncTxDelay = timeSyncTxDelay;
+				if (timeSyncTxDelay > peakTimeSyncTxDelay)
+				{
+					peakTimeSyncTxDelay = timeSyncTxDelay;
+				}
+
+				// Occasionally on the SAME70 we get very large delays reported. These delays are not genuine.
+				if (timeSyncTxDelay < MaxTimeSyncDelay)
+				{
+					msg->lastTimeAcknowledgeDelay = timeSyncTxDelay;
+				}
+				gotTimeSyncTxTimeStamp = false;
 			}
 
-			// Occasionally on the SAME70 we get very large delays reported. These delays are not genuine.
-			if (timeSyncTxDelay < MaxTimeSyncDelay)
+			msg->isPrinting = reprap.GetGCodes().IsReallyPrinting();
+
+			// Send the real time just once a second
+			const uint32_t realTime = (uint32_t)reprap.GetPlatform().GetDateTime();
+			if (realTime != lastRealTimeSent)
 			{
-				msg->lastTimeAcknowledgeDelay = timeSyncTxDelay;
+				msg->realTime = realTime;
+				lastRealTimeSent = realTime;
 			}
-			gotTimeSyncTxTimeStamp = false;
-		}
-
-		msg->isPrinting = reprap.GetGCodes().IsReallyPrinting();
-
-		// Send the real time just once a second
-		const uint32_t realTime = (uint32_t)reprap.GetPlatform().GetDateTime();
-		if (realTime != lastRealTimeSent)
-		{
-			msg->realTime = realTime;
-			lastRealTimeSent = realTime;
-		}
-		else
-		{
-			buf.dataLength = CanMessageTimeSync::SizeWithoutRealTime;		// send a short message to save CAN bandwidth
-		}
+			else
+			{
+				buf.dataLength = CanMessageTimeSync::SizeWithoutRealTime;		// send a short message to save CAN bandwidth
+			}
 
 #if SAME70
-		lastTimeSent = StepTimer::GetTimerTicks();
-#else
-		{
-			AtomicCriticalSectionLocker lock;
 			lastTimeSent = StepTimer::GetTimerTicks();
-			lastTimeSyncTxPreparedStamp = CanInterface::GetTimeStampCounter();
-		}
+#else
+			{
+				AtomicCriticalSectionLocker lock;
+				lastTimeSent = StepTimer::GetTimerTicks();
+				lastTimeSyncTxPreparedStamp = CanInterface::GetTimeStampCounter();
+			}
 #endif
-		msg->timeSent = lastTimeSent;
-		SendCanMessage(TxBufferIndexTimeSync, 0, &buf);
-		++timeSyncMessagesSent;
-
-		// Blink the LED at about 2Hz. Duet 3 expansion boards will blink in sync when they have established clock sync with us.
-		digitalWrite(DiagPin, XNor(DiagOnPolarity, lastTimeSent & (1u << 19)) != 0);
+			msg->timeSent = lastTimeSent;
+			SendCanMessage(TxBufferIndexTimeSync, 0, &buf);
+			++timeSyncMessagesSent;
+		}
 
 		// Delay until it is time again
 		vTaskDelayUntil(&lastWakeTime, CanClockIntervalMillis);
-
-#if SUPPORT_REMOTE_COMMANDS
-		if (inExpansionMode)
-		{
-			vTaskDelete(nullptr);											// once in expansion mode we can't revert to main board mode, so we don't need this task any more
-		}
-#endif
 
 		// Check that the message was sent and get the time stamp
 		if (can0dev->IsSpaceAvailable((CanDevice::TxBufferNumber)TxBufferIndexTimeSync, 0))		// if the buffer is free already then the message was sent
@@ -591,10 +503,53 @@ extern "C" [[noreturn]] void CanClockLoop(void *) noexcept
 		else
 		{
 			(void)can0dev->IsSpaceAvailable((CanDevice::TxBufferNumber)TxBufferIndexTimeSync, MaxTimeSyncSendWait);		// free the buffer
-			can0dev->PollTxEventFifo(TxCallback);							// empty the fifo
-			gotTimeSyncTxTimeStamp = false;									// ignore any values read from it
+			can0dev->PollTxEventFifo(TxCallback);								// empty the fifo
+			gotTimeSyncTxTimeStamp = false;										// ignore any values read from it
 		}
 	}
+}
+
+// Insert a new entry, keeping the list ordered
+void CanDriversList::AddEntry(DriverId driver) noexcept
+{
+	if (numEntries < ARRAY_SIZE(drivers))
+	{
+		// We could do a binary search here but the number of CAN drivers supported isn't huge, so linear search instead
+		size_t insertPoint = 0;
+		while (insertPoint < numEntries && drivers[insertPoint] < driver)
+		{
+			++insertPoint;
+		}
+
+		if (insertPoint == numEntries)
+		{
+			drivers[numEntries] = driver;
+			++numEntries;
+		}
+		else if (drivers[insertPoint] != driver)
+		{
+			memmove(drivers + (insertPoint + 1), drivers + insertPoint, (numEntries - insertPoint) * sizeof(drivers[0]));
+			drivers[insertPoint] = driver;
+			++numEntries;
+		}
+	}
+}
+
+// Get the details of the drivers on the next board and advance startFrom beyond the entries for this board
+CanAddress CanDriversList::GetNextBoardDriverBitmap(size_t& startFrom, CanDriversBitmap& driversBitmap) const noexcept
+{
+	driversBitmap.Clear();
+	if (startFrom >= numEntries)
+	{
+		return CanId::NoAddress;
+	}
+	const CanAddress boardAddress = drivers[startFrom].boardAddress;
+	do
+	{
+		driversBitmap.SetBit(drivers[startFrom].localDriver);
+		++startFrom;
+	} while (startFrom < numEntries && drivers[startFrom].boardAddress == boardAddress);
+	return boardAddress;
 }
 
 // Members of namespace CanInterface, and associated local functions
@@ -618,7 +573,7 @@ template<class T> static GCodeResult SetRemoteDriverValues(const CanDriversData<
 			reply.lcat(NoCanBufferMessage);
 			return GCodeResult::error;
 		}
-		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 		CanMessageMultipleDrivesRequest<T> * const msg = buf->SetupRequestMessage<CanMessageMultipleDrivesRequest<T>>(rid, CanInterface::GetCanAddress(), boardAddress, mt);
 		msg->driversToUpdate = driverBits.GetRaw();
 		const size_t numDrivers = driverBits.CountSetBits();
@@ -655,7 +610,7 @@ static GCodeResult SetRemoteDriverStates(const CanDriversList& drivers, const St
 			reply.lcat(NoCanBufferMessage);
 			return GCodeResult::error;
 		}
-		const CanRequestId rid = (fromMoveTask) ? CanRequestIdNoReplyNeeded : CanInterface::AllocateRequestId(boardAddress, buf);
+		const CanRequestId rid = (fromMoveTask) ? CanRequestIdNoReplyNeeded : CanInterface::AllocateRequestId(boardAddress);
 		const auto msg = buf->SetupRequestMessage<CanMessageMultipleDrivesRequest<DriverStateControl>>(rid, CanInterface::GetCanAddress(), boardAddress, CanMessageType::setDriverStates);
 		msg->driversToUpdate = driverBits.GetRaw();
 		const size_t numDrivers = driverBits.CountSetBits();
@@ -737,14 +692,12 @@ GCodeResult CanInterface::SendRequestAndGetCustomReply(CanMessageBuffer *buf, Ca
 		MutexLocker lock(transactionMutex);
 
 		SendCanMessage(TxBufferIndexRequest, MaxRequestSendWait, buf);
-		reprap.GetPlatform().OnProcessingCanMessage();
-
 		const uint32_t whenStartedWaiting = millis();
 		unsigned int fragmentsReceived = 0;
 		for (;;)
 		{
 			const uint32_t timeWaiting = millis() - whenStartedWaiting;
-			if (!can0dev->ReceiveMessage(RxBufferIndexResponse, UsualResponseTimeout - timeWaiting, buf))
+			if (!can0dev->ReceiveMessage(RxBufferIndexResponse, CanResponseTimeout - timeWaiting, buf))
 			{
 				break;
 			}
@@ -839,20 +792,6 @@ void CanInterface::SendMessageNoReplyNoFree(CanMessageBuffer *buf) noexcept
 	}
 }
 
-#if DUAL_CAN
-
-uint32_t CanInterface::SendPlainMessageNoFree(CanMessageBuffer *buf, uint32_t const timeout) noexcept
-{
-	return (can1dev != nullptr) ? can1dev->SendMessage(CanDevice::TxBufferNumber::fifo, timeout, buf) : 0;
-}
-
-bool CanInterface::ReceivePlainMessage(CanMessageBuffer *null buf, uint32_t const timeout) noexcept
-{
-	return can1dev != nullptr && can1dev->ReceiveMessage(CanDevice::RxBufferNumber::fifo0, timeout, buf);
-}
-
-#endif
-
 // The CanReceiver task
 extern "C" [[noreturn]] void CanReceiverLoop(void *) noexcept
 {
@@ -932,13 +871,6 @@ pre(driver.IsRemote())
 	{
 	case -1:
 	case 0:
-		if (gb.SeenAny("RS"))
-		{
-			if (!reprap.GetGCodes().LockMovementAndWaitForStandstill(gb))
-			{
-				return GCodeResult::notFinished;
-			}
-		}
 		{
 			CanMessageGenericConstructor cons(M569Params);
 			cons.PopulateFromCommand(gb);
@@ -946,85 +878,10 @@ pre(driver.IsRemote())
 		}
 
 	case 1:
-		if (gb.SeenAny("STERID"))
-		{
-			if (!reprap.GetGCodes().LockMovementAndWaitForStandstill(gb))
-			{
-				return GCodeResult::notFinished;
-			}
-		}
 		{
 			CanMessageGenericConstructor cons(M569Point1Params);
 			cons.PopulateFromCommand(gb);
 			return cons.SendAndGetResponse(CanMessageType::m569p1, driver.boardAddress, reply);
-		}
-
-	case 2:
-		{
-			gb.MustSee('R');
-			CanMessageGenericConstructor cons(M569Point2Params);
-			cons.PopulateFromCommand(gb);
-			return cons.SendAndGetResponse(CanMessageType::m569p2, driver.boardAddress, reply);
-		}
-
-#if DUAL_CAN
-	case 3:			// read driver encoder via secondary CAN
-		{
-			if (reprap.GetMove().GetKinematics().GetKinematicsType() == KinematicsType::hangprinter) {
-				return HangprinterKinematics::ReadODrive3Encoder(driver, gb, reply);
-			}
-			return GCodeResult::errorNotSupported;
-		}
-	case 4:			// set driver torque mode via secondary CAN
-		{
-			if (reprap.GetMove().GetKinematics().GetKinematicsType() == KinematicsType::hangprinter) {
-				gb.MustSee('T');
-				const float torque = gb.GetFValue();
-				return HangprinterKinematics::SetODrive3TorqueMode(driver, torque, reply);
-			}
-			return GCodeResult::errorNotSupported;
-		}
-#endif
-
-	case 5:
-		return ClosedLoop::StartDataCollection(driver, gb, reply);
-
-	case 6:
-		if (gb.LatestMachineState().commandRepeated)
-		{
-			// We already sent the tuning command so we just need to get the status. Delay 100ms to avoid overloading the CAN bus.
-			if (!gb.DoDwellTime(100))
-			{
-				return GCodeResult::notFinished;
-			}
-			CanMessageGenericConstructor cons(M569Point6Params_StatusOnly);
-			cons.PopulateFromCommand(gb);
-			return cons.SendAndGetResponse(CanMessageType::m569p6, driver.boardAddress, reply);
-		}
-		else
-		{
-			// First call, so send the tuning command
-			CanMessageGenericConstructor cons(M569Point6Params);
-			cons.PopulateFromCommand(gb);
-			return cons.SendAndGetResponse(CanMessageType::m569p6, driver.boardAddress, reply);
-		}
-
-	case 7:
-		if (gb.Seen('C'))
-		{
-			// If a port name if provided, it must match the board ID
-			String<StringLength20> portName;
-			gb.GetQuotedString(portName.GetRef(), false);
-			if (isdigit(portName[0]) && IoPort::RemoveBoardAddress(portName.GetRef()) != driver.boardAddress)
-			{
-				reply.copy("Brake port must be on same board as driver");
-				return GCodeResult::error;
-			}
-		}
-		{
-			CanMessageGenericConstructor cons(M569Point7Params);
-			cons.PopulateFromCommand(gb);
-			return cons.SendAndGetResponse(CanMessageType::m569p7, driver.boardAddress, reply);
 		}
 
 	default:
@@ -1076,7 +933,7 @@ static GCodeResult GetRemoteInfo(uint8_t infoType, uint32_t boardAddress, uint8_
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageReturnInfo>(rid, CanInterface::GetCanAddress(), (CanAddress)boardAddress);
 	msg->type = infoType;
 	msg->param = param;
@@ -1121,7 +978,7 @@ GCodeResult CanInterface::RemoteDiagnostics(MessageType mt, uint32_t boardAddres
 
 	// It's a diagnostic test
 	CanMessageBuffer * const buf = AllocateBuffer(&gb);
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto const msg = buf->SetupRequestMessage<CanMessageDiagnosticTest>(rid, GetCanAddress(), (CanAddress)boardAddress);
 	msg->testType = type;
 	msg->invertedTestType = ~type;
@@ -1158,7 +1015,7 @@ void CanInterface::WakeAsyncSenderFromIsr() noexcept
 }
 
 // Remote handle functions
-GCodeResult CanInterface::CreateHandle(CanAddress boardAddress, RemoteInputHandle h, const char *_ecv_array pinName, uint16_t threshold, uint16_t minInterval,
+GCodeResult CanInterface::CreateHandle(CanAddress boardAddress, RemoteInputHandle h, const char *pinName, uint16_t threshold, uint16_t minInterval,
 										bool& currentState, const StringRef& reply) noexcept
 {
 	CanMessageBuffer * const buf = CanMessageBuffer::Allocate();
@@ -1168,7 +1025,7 @@ GCodeResult CanInterface::CreateHandle(CanAddress boardAddress, RemoteInputHandl
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageCreateInputMonitor>(rid, GetCanAddress(), boardAddress);
 	msg->handle = h;
 	msg->threshold = threshold;
@@ -1200,7 +1057,7 @@ static GCodeResult ChangeInputMonitor(CanAddress boardAddress, RemoteInputHandle
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageChangeInputMonitor>(rid, CanInterface::GetCanAddress(), boardAddress);
 	msg->handle = h;
 	msg->action = action;
@@ -1243,7 +1100,7 @@ GCodeResult CanInterface::ReadRemoteHandles(CanAddress boardAddress, RemoteInput
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageReadInputsRequest>(rid, GetCanAddress(), boardAddress);
 	msg->mask = mask;
 	msg->pattern = pattern;
@@ -1261,28 +1118,18 @@ GCodeResult CanInterface::ReadRemoteHandles(CanAddress boardAddress, RemoteInput
 
 void CanInterface::Diagnostics(MessageType mtype) noexcept
 {
-	Platform& p = reprap.GetPlatform();
-	p.Message(mtype, "=== CAN ===\n");
-	// If the user runs M122 after an emergency stop, can0dev will be null
-	if (can0dev == nullptr)
-	{
-		p.Message(mtype, "Disabled\n");
-	}
-	else
-	{
-		unsigned int messagesQueuedForSending, messagesReceived, messagesLost, busOffCount;
-		can0dev->GetAndClearStats(messagesQueuedForSending, messagesReceived, messagesLost, busOffCount);
-		p.MessageF(mtype, "Messages queued %u, received %u, lost %u, boc %u\n", messagesQueuedForSending, messagesReceived, messagesLost, busOffCount);
-	}
-
-	p.MessageF(mtype,
-				"Longest wait %" PRIu32 "ms for reply type %u, peak Tx sync delay %" PRIu32
+	unsigned int messagesQueuedForSending, messagesReceived, messagesLost, busOffCount;
+	can0dev->GetAndClearStats(messagesQueuedForSending, messagesReceived, messagesLost, busOffCount);
+	reprap.GetPlatform().MessageF(mtype,
+				"=== CAN ===\nMessages queued %u, received %u, lost %u, longest wait %" PRIu32 "ms for reply type %u"
+				", peak Tx sync delay %" PRIu32
 				", free buffers %u (min %u)"
 	//debug
 				", ts %u/%u/%u"
 	//end debug
 				"\n",
-					longestWaitTime, longestWaitMessageType, peakTimeSyncTxDelay,
+					messagesQueuedForSending, messagesReceived, messagesLost, longestWaitTime, longestWaitMessageType,
+					peakTimeSyncTxDelay,
 					CanMessageBuffer::GetFreeBuffers(), CanMessageBuffer::GetAndClearMinFreeBuffers()
 	//debug
 					, timeSyncMessagesSent, goodTimeStamps, badTimeStamps
@@ -1302,7 +1149,7 @@ void CanInterface::Diagnostics(MessageType mtype) noexcept
 		CanId id;
 		id.SetReceivedId(lastCancelledId);
 		lastCancelledId = 0;
-		str.catf(" last cancelled message type %u dest %u", (unsigned int)id.MsgType(), id.Dst());
+		str.catf(" last cancelled message type %u dest %u\n", (unsigned int)id.MsgType(), id.Dst());
 	}
 
 	reprap.GetPlatform().MessageF(mtype, "Tx timeouts%s\n", str.c_str());
@@ -1321,7 +1168,7 @@ GCodeResult CanInterface::WriteGpio(CanAddress boardAddress, uint8_t portNumber,
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageWriteGpio>(rid, GetCanAddress(), boardAddress);
 	msg->portNumber = portNumber;
 	msg->pwm = pwm;
@@ -1385,7 +1232,7 @@ GCodeResult CanInterface::ChangeAddressAndNormalTiming(GCodeBuffer& gb, const St
 	}
 
 	CanMessageBufferHandle buf(AllocateBuffer(&gb));
-	const CanRequestId rid = CanInterface::AllocateRequestId((uint8_t)oldAddress, buf.Access());
+	const CanRequestId rid = CanInterface::AllocateRequestId((uint8_t)oldAddress);
 	auto msg = buf.Access()->SetupRequestMessage<CanMessageSetAddressAndNormalTiming>(rid, GetCanAddress(), (uint8_t)oldAddress);
 	msg->oldAddress = (uint8_t)oldAddress;
 
@@ -1418,7 +1265,7 @@ GCodeResult CanInterface::CreateFilamentMonitor(DriverId driver, uint8_t type, c
 	try
 	{
 		CanMessageBuffer* const buf = AllocateBuffer(&gb);
-		const CanRequestId rid = CanInterface::AllocateRequestId(driver.boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(driver.boardAddress);
 		auto msg = buf->SetupRequestMessage<CanMessageCreateFilamentMonitor>(rid, GetCanAddress(), driver.boardAddress);
 		msg->driver = driver.localDriver;
 		msg->type = type;
@@ -1446,7 +1293,7 @@ GCodeResult CanInterface::DeleteFilamentMonitor(DriverId driver, GCodeBuffer* gb
 	try
 	{
 		CanMessageBuffer* const buf = AllocateBuffer(gb);
-		const CanRequestId rid = CanInterface::AllocateRequestId(driver.boardAddress, buf);
+		const CanRequestId rid = CanInterface::AllocateRequestId(driver.boardAddress);
 		auto msg = buf->SetupRequestMessage<CanMessageDeleteFilamentMonitor>(rid, GetCanAddress(), driver.boardAddress);
 		msg->driver = driver.localDriver;
 		return SendRequestAndGetStandardReply(buf, rid, reply);
@@ -1463,7 +1310,7 @@ GCodeResult CanInterface::DeleteFilamentMonitor(DriverId driver, GCodeBuffer* gb
 GCodeResult CanInterface::StartAccelerometer(DriverId device, uint8_t axes, uint16_t numSamples, uint8_t mode, const GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException)
 {
 	CanMessageBuffer* const buf = AllocateBuffer(&gb);
-	const CanRequestId rid = CanInterface::AllocateRequestId(device.boardAddress, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(device.boardAddress);
 	auto msg = buf->SetupRequestMessage<CanMessageStartAccelerometer>(rid, GetCanAddress(), device.boardAddress);
 	msg->deviceNumber = device.localDriver;
 	msg->axes = axes;
@@ -1474,87 +1321,6 @@ GCodeResult CanInterface::StartAccelerometer(DriverId device, uint8_t axes, uint
 }
 
 # endif
-
-GCodeResult CanInterface::StartClosedLoopDataCollection(DriverId device, uint16_t filter, uint16_t numSamples, uint16_t rateRequested, uint8_t movementRequested, uint8_t mode, const GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException)
-{
-	CanMessageBuffer* const buf = AllocateBuffer(&gb);
-	const CanRequestId rid = CanInterface::AllocateRequestId(device.boardAddress, buf);
-	auto msg = buf->SetupRequestMessage<CanMessageStartClosedLoopDataCollection>(rid, GetCanAddress(), device.boardAddress);
-	msg->mode = mode;
-	msg->filter = filter;
-	msg->rate = rateRequested;
-	msg->numSamples = numSamples;
-	msg->movement = movementRequested;
-	msg->deviceNumber = device.localDriver;
-	return SendRequestAndGetStandardReply(buf, rid, reply);
-}
-
-#if DUAL_CAN
-CanId CanInterface::ODrive::ArbitrationId(DriverId const driver, uint8_t const cmd) noexcept {
-	const auto arbitration_id = (driver.boardAddress << 5) + cmd;
-	CanId canId;
-	canId.SetReceivedId(arbitration_id);
-	return canId;
-}
-#endif
-
-#if DUAL_CAN
-CanMessageBuffer * CanInterface::ODrive::PrepareSimpleMessage(DriverId const driver, const StringRef& reply) noexcept
-{
-	// Detect any early return conditions
-	if (can1dev == nullptr)
-	{
-		return nullptr;
-	}
-	CanMessageBuffer * buf = CanMessageBuffer::Allocate();
-	if (buf == nullptr)
-	{
-		reply.copy(NoCanBufferMessage);
-		return nullptr;
-	}
-
-	// Build the message
-	buf->marker = 0;
-	buf->extId = false; // ODrive uses 11-bit IDs
-	buf->fdMode = false;
-	buf->useBrs = false;
-	buf->dataLength = 0;
-	buf->reportInFifo = false;
-
-	return buf;
-}
-#endif
-
-#if DUAL_CAN
-void CanInterface::ODrive::FlushCanReceiveHardware() noexcept
-{
-	while (CanInterface::ReceivePlainMessage(nullptr, 0)) { }
-}
-#endif
-
-
-#if DUAL_CAN
-bool CanInterface::ODrive::GetExpectedSimpleMessage(CanMessageBuffer *buf, DriverId const driver, uint8_t const cmd, const StringRef& reply) noexcept
-{
-	CanId const expectedId = ArbitrationId(driver, cmd);
-
-	int count = 0;
-	bool ok = true;
-	do{
-		ok = ReceivePlainMessage(buf, MaxResponseSendWait);
-		count++;
-	} while (ok && buf->id != expectedId && count < 5);
-
-	ok = ok && buf->id == expectedId;
-
-	if (!ok)
-	{
-		reply.printf("Message not received");
-	}
-
-	return ok;
-}
-#endif
 
 #endif
 

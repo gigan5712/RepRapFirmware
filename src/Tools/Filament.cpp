@@ -30,19 +30,29 @@ Filament::Filament(int extr) noexcept : extruder(extr)
 
 void Filament::Load(const char *filamentName) noexcept
 {
+	MutexLocker locker(Tasks::GetFilamentsMutex());
 	SafeStrncpy(name, filamentName, ARRAY_SIZE(name));
 	Filament::SaveAssignments();
 }
 
 void Filament::Unload() noexcept
 {
+	MutexLocker locker(Tasks::GetFilamentsMutex());
 	strcpy(name, "");
 	Filament::SaveAssignments();
 }
 
 void Filament::LoadAssignment() noexcept
 {
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
+# if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface())
+	{
+		// Filament configuration is saved on the SBC
+		return;
+	}
+# endif
+
 	FileStore * const file = reprap.GetPlatform().OpenSysFile(FilamentAssignmentFile, OpenMode::read);
 	if (file == nullptr)
 	{
@@ -84,7 +94,15 @@ void Filament::LoadAssignment() noexcept
 	// Update the OM when the filament has been changed
 	reprap.MoveUpdated();
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
+# if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface())
+	{
+		// Filament configuration is saved on the SBC
+		return;
+	}
+# endif
+
 	FileStore * const file = reprap.GetPlatform().OpenSysFile(FilamentAssignmentFile, OpenMode::write);
 	if (file == nullptr)
 	{
@@ -119,6 +137,18 @@ void Filament::LoadAssignment() noexcept
 
 	file->Close();
 #endif
+}
+
+/*static*/ bool Filament::IsInUse(const char *filamentName) noexcept
+{
+	for (Filament *f = filamentList; f != nullptr; f = f->next)
+	{
+		if (StringEqualsIgnoreCase(f->name, filamentName))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 /*static*/ Filament *Filament::GetFilamentByExtruder(const int extr) noexcept

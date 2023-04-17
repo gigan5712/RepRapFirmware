@@ -12,7 +12,7 @@
 
 class QueuedCode;
 
-const size_t BufferSizePerQueueItem = ShortGCodeLength;
+const size_t BufferSizePerQueueItem = SHORT_GCODE_LENGTH;
 
 class GCodeQueue : public GCodeInput
 {
@@ -48,7 +48,7 @@ public:
 private:
 	QueuedCode *next;
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	bool isBinary;
 	alignas(4) char data[BufferSizePerQueueItem];
 #else

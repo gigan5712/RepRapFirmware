@@ -39,17 +39,11 @@ public:
 	float GetAccumulator() const noexcept override;							// Return the integral accumulator
 	void Suspend(bool sus) noexcept override;								// Suspend the heater to conserve power or while doing Z probing
 	void FeedForwardAdjustment(float fanPwmChange, float extrusionChange) noexcept override;
-	void SetExtrusionFeedForward(float pwm) noexcept override;				// Set extrusion feedforward
+
 #if SUPPORT_CAN_EXPANSION
 	bool IsLocal() const noexcept override { return true; }
 	void UpdateRemoteStatus(CanAddress src, const CanHeaterReport& report) noexcept override { }
 	void UpdateHeaterTuning(CanAddress src, const CanMessageHeaterTuningReport& msg) noexcept override { }
-#endif
-
-#if SUPPORT_REMOTE_COMMANDS
-	GCodeResult TuningCommand(const CanMessageHeaterTuningCommand& msg, const StringRef& reply) noexcept override;
-
-	static bool GetTuningCycleData(CanMessageHeaterTuningReport& msg) noexcept;	// get a heater tuning cycle report, if we have one
 #endif
 
 protected:
@@ -66,18 +60,15 @@ private:
 	TemperatureError ReadTemperature() noexcept;			// Read and store the temperature of this heater
 	void DoTuningStep() noexcept;							// Called on each temperature sample when auto tuning
 	float GetExpectedHeatingRate() const noexcept;			// Get the minimum heating rate we expect
-	void RaiseHeaterFault(HeaterFaultType type, const char *_ecv_array format, ...) noexcept;
+	void RaiseHeaterFault(const char *format, ...) noexcept;
 
-	PwmPort ports[MaxPortsPerHeater];						// The port(s) that drive the heater
+	PwmPort port;											// The port that drives the heater
 	float temperature;										// The current temperature
 	float previousTemperatures[NumPreviousTemperatures]; 	// The temperatures of the previous NumDerivativeSamples measurements, used for calculating the derivative
 	size_t previousTemperatureIndex;						// Which slot in previousTemperature we fill in next
 	float iAccumulator;										// The integral LocalHeater component
-	float lastPwm;											// The last PWM value set for this heater
+	float lastPwm;											// The last PWM value we output, before scaling by kS
 	float averagePWM;										// The running average of the PWM, after scaling.
-	volatile float extrusionBoost;							// The amount of extrusion feedforward to apply
-	float lastTemperatureValue;								// the last temperature we recorded while heating up
-	uint32_t lastTemperatureMillis;							// when we recorded the last temperature
 	uint32_t timeSetHeating;								// When we turned on the heater
 	uint32_t lastSampleTime;								// Time when the temperature was last sampled by Spin()
 

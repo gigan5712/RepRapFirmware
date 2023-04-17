@@ -59,7 +59,6 @@
  */
 
 #include "ctrl_access.h"
-#include "conf_sd_mmc.h"
 
 /*! \name Control Interface
  */
@@ -88,8 +87,6 @@ extern Ctrl_status sd_mmc_test_unit_ready(uint8_t slot) noexcept;
  */
 extern Ctrl_status sd_mmc_read_capacity(uint8_t slot,uint32_t *u32_nb_sector) noexcept;
 
-#if SUPPORT_WRITE_PROTECT
-
 /*! \brief Returns the write-protection state of the memory.
  *
 *  \param slot SD/MMC Slot Card Selected.
@@ -100,7 +97,6 @@ extern Ctrl_status sd_mmc_read_capacity(uint8_t slot,uint32_t *u32_nb_sector) no
  */
 extern bool sd_mmc_wr_protect(uint8_t slot) noexcept;
 
-#endif
 
 /*! \name MEM <-> RAM Interface
  */

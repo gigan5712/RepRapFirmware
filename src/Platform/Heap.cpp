@@ -391,7 +391,7 @@ void StringHandle::InternalAssign(const char *s, size_t len) noexcept
 {
 	IndexSlot * const slot = AllocateHandle();
 	StorageSpace * const space = AllocateSpace(len + 1);
-	SafeStrncpy(space->data, s, len + 1);
+	SafeStrncpy(space->data, s, space->length);
 	slot->storage = space;
 	slot->refCount = 1;
 	slotPtr = slot;
@@ -486,7 +486,7 @@ size_t StringHandle::GetLength() const noexcept
 	return strlen(slotPtr->storage->data);
 }
 
-/*static*/ void StringHandle::Diagnostics(MessageType mt, Platform& p) noexcept
+/*static*/ void StringHandle::Diagnostics(MessageType mt) noexcept
 {
 	String<StringLength256> temp;
 	const bool ok = CheckIntegrity(temp.GetRef());
@@ -496,7 +496,7 @@ size_t StringHandle::GetLength() const noexcept
 	}
 	temp.catf(", handles allocated/used %u/%u, heap memory allocated/used/recyclable %u/%u/%u, gc cycles %u\n",
 					handlesAllocated, (unsigned int)handlesUsed, heapAllocated, heapUsed, (unsigned int)heapToRecycle, gcCyclesDone);
-	p.Message(mt, temp.c_str());
+	reprap.GetPlatform().Message(mt, temp.c_str());
 }
 
 // AutoStringHandle members

@@ -9,9 +9,7 @@
 #define SRC_PLATFORM_HEAP_H_
 
 #include <RepRapFirmware.h>
-#include <RTOSIface/RTOSIface.h>			// for class ReadLockedPointer
-
-#include <atomic>
+#include <RTOSIface/RTOSIface.h>
 
 class IndexSlot;
 class StorageSpace;
@@ -25,7 +23,7 @@ class StringHandle
 {
 public:
 	StringHandle() noexcept { slotPtr = nullptr; }
-	explicit StringHandle(const char *s) noexcept;
+	StringHandle(const char *s) noexcept;
 	StringHandle(const char *s, size_t len) noexcept;
 
 #if 0	// unused
@@ -44,7 +42,7 @@ public:
 //	static size_t GetIndexSpace() noexcept { return totalIndexSpace; }
 //	static size_t GetHeapSpace() noexcept { return totalHeapSpace; }
 	static bool CheckIntegrity(const StringRef& errmsg) noexcept;
-	static void Diagnostics(MessageType mt, Platform& p) noexcept;
+	static void Diagnostics(MessageType mt) noexcept;
 
 protected:
 	void InternalAssign(const char *s, size_t len) noexcept;
@@ -55,7 +53,7 @@ protected:
 	static void GarbageCollectInternal() noexcept;
 	static void AdjustHandles(char *startAddr, char *endAddr, size_t moveDown, unsigned int numHandles) noexcept;
 
-	IndexSlot * null slotPtr;
+	IndexSlot *slotPtr;
 
 	static ReadWriteLock heapLock;
 	static IndexBlock *indexRoot;
@@ -73,7 +71,7 @@ class AutoStringHandle : public StringHandle
 {
 public:
 	AutoStringHandle() noexcept : StringHandle() { }
-	explicit AutoStringHandle(const char *s) noexcept : StringHandle(s) { }
+	AutoStringHandle(const char *s) noexcept : StringHandle(s) { }
 	AutoStringHandle(const char *s, size_t len) noexcept : StringHandle(s, len) { }
 	AutoStringHandle(const AutoStringHandle& other) noexcept;
 	AutoStringHandle(AutoStringHandle&& other) noexcept;

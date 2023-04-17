@@ -94,7 +94,6 @@ public:
 	virtual EndStopType GetEndstopType() const noexcept = 0;
 	virtual bool Prime(const Kinematics& kin, const AxisDriversConfig& axisDrivers) noexcept = 0;
 	virtual void AppendDetails(const StringRef& str) noexcept = 0;
-	virtual bool ShouldReduceAcceleration() const noexcept { return false; }
 
 #if SUPPORT_CAN_EXPANSION
 	// Process a remote endstop input change that relates to this endstop

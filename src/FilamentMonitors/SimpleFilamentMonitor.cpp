@@ -10,10 +10,6 @@
 #include <Platform/Platform.h>
 #include <GCodes/GCodeBuffer/GCodeBuffer.h>
 
-#if SUPPORT_REMOTE_COMMANDS
-# include <CanMessageGenericParser.h>
-#endif
-
 #if SUPPORT_OBJECT_MODEL
 
 // Object model table and functions
@@ -37,8 +33,8 @@ DEFINE_GET_OBJECT_MODEL_TABLE(SimpleFilamentMonitor)
 
 #endif
 
-SimpleFilamentMonitor::SimpleFilamentMonitor(unsigned int drv, unsigned int monitorType, DriverId did) noexcept
-	: FilamentMonitor(drv, monitorType, did), highWhenNoFilament(monitorType == 2), filamentPresent(false), enabled(false)
+SimpleFilamentMonitor::SimpleFilamentMonitor(unsigned int extruder, unsigned int monitorType) noexcept
+	: FilamentMonitor(extruder, monitorType), highWhenNoFilament(monitorType == 2), filamentPresent(false), enabled(false)
 {
 }
 
@@ -46,7 +42,7 @@ SimpleFilamentMonitor::SimpleFilamentMonitor(unsigned int drv, unsigned int moni
 GCodeResult SimpleFilamentMonitor::Configure(GCodeBuffer& gb, const StringRef& reply, bool& seen) THROWS(GCodeException)
 {
 	const GCodeResult rslt = CommonConfigure(gb, reply, InterruptMode::none, seen);
-	if (Succeeded(rslt))
+	if (rslt <= GCodeResult::warning)
 	{
 		if (gb.Seen('S'))
 		{
@@ -108,41 +104,5 @@ void SimpleFilamentMonitor::Diagnostics(MessageType mtype, unsigned int extruder
 	Poll();
 	reprap.GetPlatform().MessageF(mtype, "Extruder %u sensor: %s\n", extruder, (filamentPresent) ? "ok" : "no filament");
 }
-
-#if SUPPORT_REMOTE_COMMANDS
-
-// Configure this sensor, returning true if error and setting 'seen' if we processed any configuration parameters
-GCodeResult SimpleFilamentMonitor::Configure(const CanMessageGenericParser& parser, const StringRef& reply) noexcept
-{
-	bool seen = false;
-	const GCodeResult rslt = CommonConfigure(parser, reply, InterruptMode::none, seen);
-	if (rslt <= GCodeResult::warning)
-	{
-		uint16_t temp;
-		if (parser.GetUintParam('S', temp))
-		{
-			seen = true;
-			enabled = (temp > 0);
-		}
-
-
-		if (seen)
-		{
-			Check(false, false, 0, 0.0);
-		}
-		else
-		{
-			reply.copy("Simple filament sensor on pin ");
-			GetPort().AppendPinName(reply);
-			reply.catf(", %s, output %s when no filament, filament present: %s",
-						(enabled) ? "enabled" : "disabled",
-						(highWhenNoFilament) ? "high" : "low",
-						(filamentPresent) ? "yes" : "no");
-		}
-	}
-	return rslt;
-}
-
-#endif
 
 // End

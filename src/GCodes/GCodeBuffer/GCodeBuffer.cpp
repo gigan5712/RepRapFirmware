@@ -8,21 +8,20 @@
 //*************************************************************************************
 
 #include "GCodeBuffer.h"
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 # include <GCodes/GCodeInput.h>
 #endif
-#if HAS_SBC_INTERFACE
-# include <SBC/SbcInterface.h>
+#if HAS_LINUX_INTERFACE
+# include <Linux/LinuxInterface.h>
 #endif
 #include "BinaryParser.h"
 #include "StringParser.h"
 #include <GCodes/GCodeException.h>
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
-#include <Movement/StepTimer.h>
 
 // Macros to reduce the amount of explicit conditional compilation in this file
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 # define PARSER_OPERATION(_x)	((isBinaryBuffer) ? (binaryParser._x) : (stringParser._x))
 # define IS_BINARY_OR(_x)		((isBinaryBuffer) || (_x))
@@ -50,21 +49,20 @@ constexpr ObjectModelTableEntry GCodeBuffer::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
 	// 0. inputs[] root
-	{ "axesRelative",		OBJECT_MODEL_FUNC((bool)self->machineState->axesRelative),							ObjectModelEntryFlags::none },
-	{ "compatibility",		OBJECT_MODEL_FUNC(self->machineState->compatibility.ToString()),					ObjectModelEntryFlags::none },
-	{ "distanceUnit",		OBJECT_MODEL_FUNC(self->GetDistanceUnits()),										ObjectModelEntryFlags::none },
-	{ "drivesRelative",		OBJECT_MODEL_FUNC((bool)self->machineState->drivesRelative),						ObjectModelEntryFlags::none },
-	{ "feedRate",			OBJECT_MODEL_FUNC(InverseConvertSpeedToMmPerSec(self->machineState->feedRate), 1),	ObjectModelEntryFlags::live },
-	{ "inMacro",			OBJECT_MODEL_FUNC((bool)self->machineState->doingFileMacro),						ObjectModelEntryFlags::live },
-	{ "lineNumber",			OBJECT_MODEL_FUNC((int32_t)self->GetLineNumber()),									ObjectModelEntryFlags::live },
-	{ "macroRestartable",	OBJECT_MODEL_FUNC((bool)self->machineState->macroRestartable),						ObjectModelEntryFlags::none },
-	{ "name",				OBJECT_MODEL_FUNC(self->codeChannel.ToString()),									ObjectModelEntryFlags::none },
-	{ "stackDepth",			OBJECT_MODEL_FUNC((int32_t)self->GetStackDepth()),									ObjectModelEntryFlags::none },
-	{ "state",				OBJECT_MODEL_FUNC(self->GetStateText()),											ObjectModelEntryFlags::live },
-	{ "volumetric",			OBJECT_MODEL_FUNC((bool)self->machineState->volumetricExtrusion),					ObjectModelEntryFlags::none },
+	{ "axesRelative",		OBJECT_MODEL_FUNC((bool)self->machineState->axesRelative),					ObjectModelEntryFlags::none },
+	{ "compatibility",		OBJECT_MODEL_FUNC(self->machineState->compatibility.ToString()),			ObjectModelEntryFlags::none },
+	{ "distanceUnit",		OBJECT_MODEL_FUNC((self->machineState->usingInches) ? "inch" : "mm"),		ObjectModelEntryFlags::none },
+	{ "drivesRelative",		OBJECT_MODEL_FUNC((bool)self->machineState->drivesRelative),				ObjectModelEntryFlags::none },
+	{ "feedRate",			OBJECT_MODEL_FUNC(self->machineState->feedRate, 1),							ObjectModelEntryFlags::live },
+	{ "inMacro",			OBJECT_MODEL_FUNC((bool)self->machineState->doingFileMacro),				ObjectModelEntryFlags::none },
+	{ "lineNumber",			OBJECT_MODEL_FUNC((int32_t)self->GetLineNumber()),							ObjectModelEntryFlags::live },
+	{ "name",				OBJECT_MODEL_FUNC(self->codeChannel.ToString()),							ObjectModelEntryFlags::none },
+	{ "stackDepth",			OBJECT_MODEL_FUNC((int32_t)self->GetStackDepth()),							ObjectModelEntryFlags::none },
+	{ "state",				OBJECT_MODEL_FUNC(self->GetStateText()),									ObjectModelEntryFlags::live },
+	{ "volumetric",			OBJECT_MODEL_FUNC((bool)self->machineState->volumetricExtrusion),			ObjectModelEntryFlags::none },
 };
 
-constexpr uint8_t GCodeBuffer::objectModelTableDescriptor[] = { 1, 12 };
+constexpr uint8_t GCodeBuffer::objectModelTableDescriptor[] = { 1, 11 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(GCodeBuffer)
 
@@ -89,20 +87,20 @@ const char *GCodeBuffer::GetStateText() const noexcept
 // Create a default GCodeBuffer
 GCodeBuffer::GCodeBuffer(GCodeChannel::RawType channel, GCodeInput *normalIn, FileGCodeInput *fileIn, MessageType mt, Compatibility::RawType c) noexcept
 	: codeChannel(channel), normalInput(normalIn),
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	  fileInput(fileIn),
 #endif
 	  responseMessageType(mt), lastResult(GCodeResult::ok),
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	  binaryParser(*this),
 #endif
 	  stringParser(*this),
 	  machineState(new GCodeMachineState()), whenReportDueTimerStarted(millis()),
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	  isBinaryBuffer(false),
 #endif
 	  timerRunning(false), motionCommanded(false)
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	  , isWaitingForMacro(false), invalidated(false)
 #endif
 {
@@ -114,7 +112,7 @@ GCodeBuffer::GCodeBuffer(GCodeChannel::RawType channel, GCodeInput *normalIn, Fi
 // Reset it to its state after start-up
 void GCodeBuffer::Reset() noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	if (isWaitingForMacro)
 	{
 		ResolveMacroRequest(true, false);
@@ -123,7 +121,7 @@ void GCodeBuffer::Reset() noexcept
 
 	while (PopState(false)) { }
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	isBinaryBuffer = false;
 	requestedMacroFile.Clear();
 	isWaitingForMacro = macroFileClosed = false;
@@ -136,7 +134,7 @@ void GCodeBuffer::Reset() noexcept
 // Set it up to parse another G-code
 void GCodeBuffer::Init() noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	sendToSbc = false;
 	binaryParser.Init();
 #endif
@@ -190,7 +188,7 @@ void GCodeBuffer::Diagnostics(MessageType mtype) noexcept
 {
 	String<StringLength256> scratchString;
 	scratchString.copy(codeChannel.ToString());
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	scratchString.cat(IsBinary() ? "* " : " ");
 #else
 	scratchString.cat(" ");
@@ -235,7 +233,7 @@ void GCodeBuffer::Diagnostics(MessageType mtype) noexcept
 // Add a character to the end
 bool GCodeBuffer::Put(char c) noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	machineState->lastCodeFromSbc = false;
 	isBinaryBuffer = false;
 #endif
@@ -254,7 +252,7 @@ bool GCodeBuffer::CheckMetaCommand(const StringRef& reply)
 	return NOT_BINARY_AND(stringParser.CheckMetaCommand(reply));
 }
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 // Add an entire binary G-Code, overwriting any existing content
 // CAUTION! This may be called with the task scheduler suspended, so don't do anything that might block or take more than a few microseconds to execute
@@ -271,7 +269,7 @@ void GCodeBuffer::PutBinary(const uint32_t *data, size_t len) noexcept
 // Add an entire G-Code, overwriting any existing content
 void GCodeBuffer::PutAndDecode(const char *str, size_t len) noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	machineState->lastCodeFromSbc = false;
 	isBinaryBuffer = false;
 #endif
@@ -281,7 +279,7 @@ void GCodeBuffer::PutAndDecode(const char *str, size_t len) noexcept
 // Add a null-terminated string, overwriting any existing content
 void GCodeBuffer::PutAndDecode(const char *str) noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	machineState->lastCodeFromSbc = false;
 	isBinaryBuffer = false;
 #endif
@@ -290,7 +288,7 @@ void GCodeBuffer::PutAndDecode(const char *str) noexcept
 
 void GCodeBuffer::StartNewFile() noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	machineState->SetFileExecuting();
 #endif
 	machineState->lineNumber = 0;						// reset line numbering when M32 is run
@@ -346,12 +344,6 @@ bool GCodeBuffer::Seen(char c) noexcept
 	return PARSER_OPERATION(Seen(c));
 }
 
-// Return true if any of the parameter letters in the bitmap were seen
-bool GCodeBuffer::SeenAny(Bitmap<uint32_t> bm) const noexcept
-{
-	return PARSER_OPERATION(SeenAny(bm));
-}
-
 // Test for character present, throw error if not
 void GCodeBuffer::MustSee(char c) THROWS(GCodeException)
 {
@@ -394,24 +386,6 @@ float GCodeBuffer::GetLimitedFValue(char c, float minValue, float maxValue) THRO
 float GCodeBuffer::GetDistance() THROWS(GCodeException)
 {
 	return ConvertDistance(GetFValue());
-}
-
-// Get a speed in mm/min or inches/min and convert it to mm/step_clock
-float GCodeBuffer::GetSpeed() THROWS(GCodeException)
-{
-	return ConvertSpeed(GetFValue());
-}
-
-// Get a speed in mm/min mm/sec and convert it to mm/step_clock
-float GCodeBuffer::GetSpeedFromMm(bool useSeconds) THROWS(GCodeException)
-{
-	return ConvertSpeedFromMm(GetFValue(), useSeconds);
-}
-
-// Get an acceleration in mm/sec^2 and convert it to mm/step_clock^2
-float GCodeBuffer::GetAcceleration() THROWS(GCodeException)
-{
-	return ConvertAcceleration(GetFValue());
 }
 
 // Get an integer after a key letter
@@ -508,46 +482,19 @@ void GCodeBuffer::GetReducedString(const StringRef& str) THROWS(GCodeException)
 // Get a colon-separated list of floats after a key letter
 void GCodeBuffer::GetFloatArray(float arr[], size_t& length, bool doPad) THROWS(GCodeException)
 {
-	const size_t maxLength = length;
-	PARSER_OPERATION(GetFloatArray(arr, length));
-	// If there is one entry and doPad is true, fill the rest of the array with the first entry.
-	if (doPad && length == 1)
-	{
-		while (length < maxLength)
-		{
-			arr[length++] = arr[0];
-		}
-	}
+	PARSER_OPERATION(GetFloatArray(arr, length, doPad));
 }
 
 // Get a :-separated list of ints after a key letter
 void GCodeBuffer::GetIntArray(int32_t arr[], size_t& length, bool doPad) THROWS(GCodeException)
 {
-	const size_t maxLength = length;
-	PARSER_OPERATION(GetIntArray(arr, length));
-	// If there is one entry and doPad is true, fill the rest of the array with the first entry.
-	if (doPad && length == 1)
-	{
-		while (length < maxLength)
-		{
-			arr[length++] = arr[0];
-		}
-	}
+	PARSER_OPERATION(GetIntArray(arr, length, doPad));
 }
 
 // Get a :-separated list of unsigned ints after a key letter
 void GCodeBuffer::GetUnsignedArray(uint32_t arr[], size_t& length, bool doPad) THROWS(GCodeException)
 {
-	const size_t maxLength = length;
-	PARSER_OPERATION(GetUnsignedArray(arr, length));
-	// If there is one entry and doPad is true, fill the rest of the array with the first entry.
-	if (doPad && length == 1)
-	{
-		while (length < maxLength)
-		{
-			arr[length++] = arr[0];
-		}
-	}
+	PARSER_OPERATION(GetUnsignedArray(arr, length, doPad));
 }
 
 // Get a :-separated list of drivers after a key letter
@@ -740,10 +687,9 @@ void GCodeBuffer::SetFinished(bool f) noexcept
 {
 	if (f)
 	{
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 		sendToSbc = false;
 #endif
-		LatestMachineState().firstCommandAfterRestart = false;
 		PARSER_OPERATION(SetFinished());
 	}
 	else
@@ -781,30 +727,13 @@ GCodeMachineState& GCodeBuffer::CurrentFileMachineState() const noexcept
 // Convert from inches to mm if necessary
 float GCodeBuffer::ConvertDistance(float distance) const noexcept
 {
-	return (UsingInches()) ? distance * InchToMm : distance;
+	return (machineState->usingInches) ? distance * InchToMm : distance;
 }
 
 // Convert from mm to inches if necessary
 float GCodeBuffer::InverseConvertDistance(float distance) const noexcept
 {
-	return (UsingInches()) ? distance/InchToMm : distance;
-}
-
-// Convert speed from mm/min or inches/min to mm per step clock
-float GCodeBuffer::ConvertSpeed(float speed) const noexcept
-{
-	return speed * ((UsingInches()) ? InchToMm/(StepClockRate * iMinutesToSeconds) : 1.0/(StepClockRate * iMinutesToSeconds));
-}
-
-// Convert speed to mm/min or inches/min
-float GCodeBuffer::InverseConvertSpeed(float speed) const noexcept
-{
-	return speed * ((UsingInches()) ? (StepClockRate * iMinutesToSeconds)/InchToMm : (float)(StepClockRate * iMinutesToSeconds));
-}
-
-const char *GCodeBuffer::GetDistanceUnits() const noexcept
-{
-	return (UsingInches()) ? "in" : "mm";
+	return (machineState->usingInches) ? distance/InchToMm : distance;
 }
 
 // Return the  current stack depth
@@ -828,31 +757,23 @@ bool GCodeBuffer::PushState(bool withinSameFile) noexcept
 	}
 
 	machineState = new GCodeMachineState(*machineState, withinSameFile);
-	reprap.InputsUpdated();
 	return true;
 }
 
 // Pop state returning true if successful (i.e. no stack underrun)
 bool GCodeBuffer::PopState(bool withinSameFile) noexcept
 {
-	bool poppedFileState;
-	do
+	GCodeMachineState * const ms = machineState;
+	if (ms->GetPrevious() == nullptr)
 	{
-		GCodeMachineState * const ms = machineState;
-		if (ms->GetPrevious() == nullptr)
-		{
-			ms->messageAcknowledged = false;			// avoid getting stuck in a loop trying to pop
-			ms->waitingForAcknowledgement = false;
-			return false;
-		}
+		ms->messageAcknowledged = false;			// avoid getting stuck in a loop trying to pop
+		ms->waitingForAcknowledgement = false;
+		return false;
+	}
 
-		poppedFileState = !ms->localPush;
-		machineState = ms->Pop();						// get the previous state and copy down any error message
-		delete ms;
-	} while (!withinSameFile && !poppedFileState);
-	IF_NOT_BINARY(stringParser.ResetIndentation());
+	machineState = ms->Pop();						// get the previous state and copy down any error message
+	delete ms;
 
-	reprap.InputsUpdated();
 	return true;
 }
 
@@ -866,9 +787,9 @@ void GCodeBuffer::AbortFile(bool abortAll, bool requestAbort) noexcept
 		{
 			if (machineState->DoingFile())
 			{
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
-# if HAS_SBC_INTERFACE
-				if (!reprap.UsingSbcInterface())
+#if HAS_MASS_STORAGE
+# if HAS_LINUX_INTERFACE
+				if (!reprap.UsingLinuxInterface())
 # endif
 				{
 					fileInput->Reset(machineState->fileState);
@@ -876,9 +797,9 @@ void GCodeBuffer::AbortFile(bool abortAll, bool requestAbort) noexcept
 #endif
 				machineState->CloseFile();
 			}
-		} while (PopState(false) && abortAll);
+		} while (PopState(false) && (abortAll || !machineState->DoingFile()));
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 		abortFile = requestAbort;
 		abortAllFiles = requestAbort && abortAll;
 	}
@@ -889,7 +810,7 @@ void GCodeBuffer::AbortFile(bool abortAll, bool requestAbort) noexcept
 	}
 }
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 
 void GCodeBuffer::SetFileFinished() noexcept
 {
@@ -916,9 +837,9 @@ void GCodeBuffer::SetFileFinished() noexcept
 		}
 	}
 
-	if (macroFileId != NoFileId)
+	if (macroFileId == NoFileId)
 	{
-		reprap.GetSbcInterface().EventOccurred();
+		reprap.GetPlatform().Message(WarningMessage, "Cannot set macro file finished because there is no file ID\n");
 	}
 }
 
@@ -935,29 +856,17 @@ void GCodeBuffer::SetPrintFinished() noexcept
 				ms->fileFinished = true;
 			}
 		}
-		reprap.GetSbcInterface().EventOccurred();
 	}
-}
-
-void GCodeBuffer::ClosePrintFile() noexcept
-{
-	FileId printFileId = OriginalMachineState().fileId;
-	if (printFileId != NoFileId)
+	else
 	{
-		for (GCodeMachineState *ms = machineState; ms != nullptr; ms = ms->GetPrevious())
-		{
-			if (ms->fileId == printFileId)
-			{
-				ms->fileId = NoFileId;
-			}
-		}
+		reprap.GetPlatform().Message(WarningMessage, "Cannot set print file finished because there is no file ID\n");
 	}
 }
 
-// This is only called when using the SBC interface and returns if the macro file could be opened
+// This is only called when using the Linux interface and returns if the macro file could be opened
 bool GCodeBuffer::RequestMacroFile(const char *filename, bool fromCode) noexcept
 {
-	if (!reprap.GetSbcInterface().IsConnected())
+	if (!reprap.GetLinuxInterface().IsConnected())
 	{
 		// Don't wait for a macro file if no SBC is connected
 		return false;
@@ -974,16 +883,15 @@ bool GCodeBuffer::RequestMacroFile(const char *filename, bool fromCode) noexcept
 	{
 		// Wait for a response (but not forever)
 		isWaitingForMacro = true;
-		reprap.GetSbcInterface().EventOccurred(true);
-		if (!macroSemaphore.Take(SpiMaxRequestTime))
+		if (!macroSemaphore.Take(SpiMacroRequestTimeout))
 		{
 			isWaitingForMacro = false;
-			reprap.GetPlatform().MessageF(ErrorMessage, "Timeout while waiting for macro file %s (channel %s)\n", filename, GetChannel().ToString());
+			reprap.GetPlatform().MessageF(ErrorMessage, "Failed to get macro response within %" PRIu32 "ms from SBC (channel %s)\n", SpiMacroRequestTimeout, GetChannel().ToString());
 			return false;
 		}
 	}
 
-	// When we get here we expect the SBC interface to have set the variables above for us
+	// When we get here we expect the Linux interface to have set the variables above for us
 	if (!macroFileError)
 	{
 		macroJustStarted = true;
@@ -1005,7 +913,6 @@ void GCodeBuffer::MacroFileClosed() noexcept
 	machineState->CloseFile();
 	macroJustStarted = false;
 	macroFileClosed = true;
-	reprap.GetSbcInterface().EventOccurred();
 }
 
 #endif
@@ -1021,9 +928,8 @@ void GCodeBuffer::MessageAcknowledged(bool cancelled) noexcept
 			ms->waitingForAcknowledgement = false;
 			ms->messageAcknowledged = true;
 			ms->messageCancelled = cancelled;
-#if HAS_SBC_INTERFACE
-			messageAcknowledged = !cancelled || !ms->DoingFile();
-			reprap.GetSbcInterface().EventOccurred();
+#if HAS_LINUX_INTERFACE
+			messageAcknowledged = !cancelled;
 #endif
 		}
 	}
@@ -1031,7 +937,7 @@ void GCodeBuffer::MessageAcknowledged(bool cancelled) noexcept
 
 MessageType GCodeBuffer::GetResponseMessageType() const noexcept
 {
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	if (machineState->lastCodeFromSbc)
 	{
 		return (MessageType)((1u << codeChannel.ToBaseType()) | BinaryCodeReplyFlag);
@@ -1048,8 +954,8 @@ FilePosition GCodeBuffer::GetFilePosition() const noexcept
 void GCodeBuffer::WaitForAcknowledgement() noexcept
 {
 	machineState->WaitForAcknowledgement();
-#if HAS_SBC_INTERFACE
-	if (reprap.UsingSbcInterface())
+#if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface())
 	{
 		messagePromptPending = true;
 	}
@@ -1092,7 +998,7 @@ void GCodeBuffer::FinishWritingBinary() noexcept
 
 void GCodeBuffer::RestartFrom(FilePosition pos) noexcept
 {
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	fileInput->Reset(machineState->fileState);		// clear the buffered data
 	machineState->fileState.Seek(pos);				// replay the abandoned instructions when we resume
 #endif
@@ -1135,14 +1041,5 @@ VariableSet& GCodeBuffer::GetVariables() const noexcept
 	}
 	return mc->variables;
 }
-
-#if SUPPORT_COORDINATE_ROTATION
-
-bool GCodeBuffer::DoingCoordinateRotation() const noexcept
-{
-	return !LatestMachineState().g53Active && !LatestMachineState().runningSystemMacro && LatestMachineState().selectedPlane == 0;
-}
-
-#endif
 
 // End

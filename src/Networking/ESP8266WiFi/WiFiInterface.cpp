@@ -7,9 +7,6 @@
 
 
 #include "WiFiInterface.h"
-
-#if HAS_WIFI_NETWORKING
-
 #include <Platform/Platform.h>
 #include <Platform/RepRap.h>
 #include <GCodes/GCodeBuffer/GCodeBuffer.h>
@@ -93,8 +90,7 @@ constexpr SSPChannel ESP_SPI = SSP0;
 # include "matrix/matrix.h"
 #endif
 
-const uint32_t WiFiResponseTimeoutMillis = 200;					// SPI timeout when when the ESP does not have to write to flash memory
-const uint32_t WiFiTransferTimeoutMillis = 60;					// Christian measured this at 29 to 31ms when the ESP has to write to flash memory
+const uint32_t WifiResponseTimeoutMillis = 200;
 const uint32_t WiFiWaitReadyMillis = 100;
 const uint32_t WiFiStartupMillis = 300;
 const uint32_t WiFiStableMillis = 100;
@@ -229,7 +225,7 @@ static void EspTransferRequestIsr(CallbackParameter) noexcept
 
 static inline void EnableEspInterrupt() noexcept
 {
-	attachInterrupt(EspDataReadyPin, EspTransferRequestIsr, InterruptMode::rising, CallbackParameter(nullptr));
+	attachInterrupt(EspDataReadyPin, EspTransferRequestIsr, InterruptMode::rising, nullptr);
 }
 
 static inline void DisableEspInterrupt() noexcept
@@ -474,9 +470,8 @@ void WiFiInterface::Activate() noexcept
 
 		bufferOut = new MessageBufferOut;
 		bufferIn = new MessageBufferIn;
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
 		uploader = new WifiFirmwareUploader(SERIAL_WIFI_DEVICE, *this);
-#endif
+
 		if (requestedMode != WiFiState::disabled)
 		{
 			Start();
@@ -647,20 +642,9 @@ void WiFiInterface::Spin() noexcept
 						rc = SendCommand(NetworkCommand::networkSetHostName, 0, 0, 0, reprap.GetNetwork().GetHostname(), HostNameLength, nullptr, 0);
 						if (rc != ResponseEmpty)
 						{
-							reprap.GetPlatform().MessageF(NetworkErrorMessage, "failed to set WiFi hostname: %s\n", TranslateWiFiResponse(rc));
+							reprap.GetPlatform().MessageF(NetworkInfoMessage, "Error: Could not set WiFi hostname: %s\n", TranslateWiFiResponse(rc));
 						}
-#if SAME5x
-						// If running the RTOS-based WiFi module code, tell the module to increase SPI clock speed to 40MHz.
-						// This is safe on SAME5x processors but not on SAM4 processors.
-						if (isdigit(wiFiServerVersion[0]) && wiFiServerVersion[0] >= '2')
-						{
-							rc = SendCommand(NetworkCommand::networkSetClockControl, 0, 0, 0x2001, nullptr, 0, nullptr, 0);
-							if (rc != ResponseEmpty)
-							{
-								reprap.GetPlatform().MessageF(NetworkErrorMessage, "failed to set WiFi SPI speed: %s\n", TranslateWiFiResponse(rc));
-							}
-						}
-#endif
+
 						SetState(NetworkState::active);
 						espStatusChanged = true;				// make sure we fetch the current state and enable the ESP interrupt
 					}
@@ -668,7 +652,7 @@ void WiFiInterface::Spin() noexcept
 					{
 						// Something went wrong, maybe a bad firmware image was flashed
 						// Disable the WiFi chip again in this case
-						platform.MessageF(NetworkErrorMessage, "failed to initialise WiFi module: %s\n", TranslateWiFiResponse(rc));
+						platform.MessageF(NetworkInfoMessage, "Error: Failed to initialise WiFi module: %s\n", TranslateWiFiResponse(rc));
 						Stop();
 					}
 				}
@@ -681,12 +665,10 @@ void WiFiInterface::Spin() noexcept
 		break;
 
 	case NetworkState::disabled:
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
 		if (uploader != nullptr)
 		{
 			uploader->Spin();
 		}
-#endif
 		break;
 
 	case NetworkState::active:
@@ -727,7 +709,7 @@ void WiFiInterface::Spin() noexcept
 			else
 			{
 				Stop();
-				platform.MessageF(NetworkErrorMessage, "failed to change WiFi mode: %s\n", TranslateWiFiResponse(rslt));
+				platform.MessageF(NetworkInfoMessage, "Failed to change WiFi mode: %s\n", TranslateWiFiResponse(rslt));
 			}
 		}
 		else if (currentMode == WiFiState::connected || currentMode == WiFiState::runningAsAccessPoint)
@@ -855,7 +837,7 @@ void WiFiInterface::Spin() noexcept
 	}
 }
 
-// Translate a ESP8266 reset reason to text. Keep this in step with the codes used in file MessageFormats.h in the WiFi server project.
+// Translate a ESP8266 reset reason to text
 const char* WiFiInterface::TranslateEspResetReason(uint32_t reason) noexcept
 {
 	// Mapping from known ESP reset codes to reasons
@@ -867,15 +849,12 @@ const char* WiFiInterface::TranslateEspResetReason(uint32_t reason) noexcept
 		"Software watchdog",
 		"Software restart",
 		"Deep-sleep wakeup",
-		"Turned on by main processor",
-		"Brownout",
-		"SDIO reset",
-		"Unknown"
+		"Turned on by main processor"
 	};
 
 	return (reason < sizeof(resetReasonTexts)/sizeof(resetReasonTexts[0]))
 			? resetReasonTexts[reason]
-			: "Unrecognised";
+			: "Unknown";
 }
 
 void WiFiInterface::Diagnostics(MessageType mtype) noexcept
@@ -1401,10 +1380,12 @@ static xdmac_channel_config_t xdmac_tx_cfg, xdmac_rx_cfg;
 
 #endif
 
-#if !USE_PDC
-
 static inline void spi_rx_dma_enable() noexcept
 {
+#if USE_PDC
+	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_RXTEN);
+#endif
+
 #if USE_DMAC
 	dmac_channel_enable(DMAC, DmacChanWiFiRx);
 #endif
@@ -1420,6 +1401,10 @@ static inline void spi_rx_dma_enable() noexcept
 
 static inline void spi_tx_dma_enable() noexcept
 {
+#if USE_PDC
+	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_TXTEN);
+#endif
+
 #if USE_DMAC
 	dmac_channel_enable(DMAC, DmacChanWiFiTx);
 #endif
@@ -1435,6 +1420,10 @@ static inline void spi_tx_dma_enable() noexcept
 
 static inline void spi_rx_dma_disable() noexcept
 {
+#if USE_PDC
+	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_RXTDIS);
+#endif
+
 #if USE_DMAC
 	dmac_channel_disable(DMAC, DmacChanWiFiRx);
 #endif
@@ -1450,6 +1439,10 @@ static inline void spi_rx_dma_disable() noexcept
 
 static inline void spi_tx_dma_disable() noexcept
 {
+#if USE_PDC
+	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_TXTDIS);
+#endif
+
 #if USE_DMAC
 	dmac_channel_disable(DMAC, DmacChanWiFiTx);
 #endif
@@ -1463,23 +1456,19 @@ static inline void spi_tx_dma_disable() noexcept
 #endif
 }
 
-#endif
-
 static void spi_dma_disable() noexcept
 {
-#if USE_PDC
-	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_TXTDIS | PERIPH_PTCR_RXTDIS);
-#else
 	spi_tx_dma_disable();
 	spi_rx_dma_disable();
-#endif
 }
 
 static inline void spi_dma_enable() noexcept
 {
 #if USE_PDC
 	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_TXTEN | PERIPH_PTCR_RXTEN);
-#else
+#endif
+
+#if USE_DMAC || USE_XDMAC || USE_DMAC_MANAGER
 	spi_rx_dma_enable();
 	spi_tx_dma_enable();
 #endif
@@ -1653,10 +1642,19 @@ static void spi_rx_dma_setup(void *buf, uint32_t transferLength) noexcept
  */
 void WiFiInterface::spi_slave_dma_setup(uint32_t dataOutSize, uint32_t dataInSize) noexcept
 {
+#if USE_PDC
+	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_TXTDIS | PERIPH_PTCR_RXTDIS);
+	spi_rx_dma_setup(&bufferIn, dataInSize + sizeof(MessageHeaderEspToSam));
+	spi_tx_dma_setup(&bufferOut, dataOutSize + sizeof(MessageHeaderSamToEsp));
+#endif
+
+#if USE_DMAC || USE_XDMAC || USE_DMAC_MANAGER
 	spi_dma_disable();					// if we don't do this we get strange crashes on the Duet 3 Mini
 	DisableSpi();
 	spi_rx_dma_setup(bufferIn, dataInSize + sizeof(MessageHeaderEspToSam));
 	spi_tx_dma_setup(bufferOut, dataOutSize + sizeof(MessageHeaderSamToEsp));
+#endif
+
 	spi_dma_enable();
 }
 
@@ -1814,7 +1812,7 @@ int32_t WiFiInterface::SendCommand(NetworkCommand cmd, SocketNumber socketNum, u
 
 	// Set up the DMA controller
 	spi_slave_dma_setup(dataOutLength, dataInLength);
-	EnableSpi();
+	spi_enable(ESP_SPI);
 
 	// Enable the end-of transfer interrupt
 	(void)ESP_SPI->SPI_SR;						// clear any pending interrupt
@@ -1827,7 +1825,7 @@ int32_t WiFiInterface::SendCommand(NetworkCommand cmd, SocketNumber socketNum, u
 	// Wait until the DMA transfer is complete, with timeout
 	do
 	{
-		if (!TaskBase::Take(WiFiResponseTimeoutMillis))
+		if (!TaskBase::Take(WifiResponseTimeoutMillis))
 		{
 			if (reprap.Debug(moduleNetwork))
 			{
@@ -1844,25 +1842,15 @@ int32_t WiFiInterface::SendCommand(NetworkCommand cmd, SocketNumber socketNum, u
 
 #if SAME5x
 	{
-		// We don't get an end-of-transfer interrupt, just a start-of-transfer one. So wait until SS is high, then disable the SPI.
-		// The normal maximum block time is about 2K * 8/spi_clock_speed plus any pauses that the ESP takes, which at 26.7MHz clock rate is 620us plus pause time
-		// However, when we send a command that involves writing to flash memory, then the flash write occurs between sending the header and the body, so it takes much longer
+		// We don't get and end-of-transfer interrupt, just a start-of-transfer one. So wait until SS is high, then disable the SPI.
+		//TODO can we use ESP_DATA_RDY to indicate end of transfer instead? or perhaps the end-of-transmit-DMA interrupt?
+		// The max block time is about 2K * 8/spi_clock_speed plus any pauses that the ESP takes, which at 26.7MHz clock rate is 620us plus pause time
 		const uint32_t startedWaitingAt = millis();
-		const bool writingFlash = (   cmd == NetworkCommand::networkAddSsid || cmd == NetworkCommand::networkConfigureAccessPoint
-								   || cmd == NetworkCommand::networkDeleteSsid || cmd == NetworkCommand::networkFactoryReset);
 		while (!digitalRead(EspSSPin))
 		{
-			const uint32_t millisWaiting = millis() - startedWaitingAt;
-			if (millisWaiting >= WiFiTransferTimeoutMillis)
+			if (millis() - startedWaitingAt >= 4)
 			{
 				return ResponseTimeout;
-			}
-
-			// The new RTOS SDK for the ESP8266 often interrupts out transfer task for long periods of time. So if the transfer is taking a while to complete, give up the CPU.
-			// Also give up the CPU if we are writing to flash memory, because we know that takes a long time.
-			if (writingFlash || millisWaiting >= 2)
-			{
-				delay(2);
 			}
 		}
 		if (WiFiSpiSercom->SPI.STATUS.bit.BUFOVF)
@@ -1943,11 +1931,11 @@ void WiFiInterface::GetNewStatus() noexcept
 	rcvr.Value().messageBuffer[ARRAY_UPB(rcvr.Value().messageBuffer)] = 0;
 	if (rslt < 0)
 	{
-		platform.MessageF(NetworkErrorMessage, "failed to retrieve WiFi status message: %s\n", TranslateWiFiResponse(rslt));
+		platform.MessageF(NetworkInfoMessage, "Error retrieving WiFi status message: %s\n", TranslateWiFiResponse(rslt));
 	}
 	else if (rslt > 0 && rcvr.Value().messageBuffer[0] != 0)
 	{
-		platform.MessageF(NetworkErrorMessage, "WiFi module reported: %s\n", rcvr.Value().messageBuffer);
+		platform.MessageF(NetworkInfoMessage, "WiFi reported error: %s\n", rcvr.Value().messageBuffer);
 	}
 }
 
@@ -2137,7 +2125,5 @@ void WiFiInterface::ResetWiFiForUpload(bool external) noexcept
 	digitalWrite(EspEnablePin, true);
 #endif
 }
-
-#endif	// HAS_WIFI_NETWORKING
 
 // End

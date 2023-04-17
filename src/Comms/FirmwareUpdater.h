@@ -12,18 +12,9 @@
 
 namespace FirmwareUpdater
 {
-	enum {
-		Mainboard = 0,
-		unused = 2, // Module 2 used to be the DWC binary file but is no longer used
-#if HAS_WIFI_NETWORKING
-		WifiFirmwareModule = 1,
-		WifiExternalFirmwareModule = 3,
-#endif
 #if HAS_AUX_DEVICES
-		PanelDueFirmwareModule = 4,
+	const unsigned int PanelDueFirmwareModule = 4;
 #endif
-		NumUpdateModules
-	};
 
 	GCodeResult CheckFirmwareUpdatePrerequisites(
 			Bitmap<uint8_t> moduleMap,

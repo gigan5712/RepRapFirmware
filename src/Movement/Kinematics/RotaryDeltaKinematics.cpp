@@ -7,8 +7,6 @@
 
 #include "RotaryDeltaKinematics.h"
 
-#if SUPPORT_ROTARY_DELTA
-
 #include <Movement/Move.h>
 #include <Platform/RepRap.h>
 #include <Storage/FileStore.h>
@@ -156,8 +154,7 @@ bool RotaryDeltaKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const
 			}
 			else if (!seenNonGeometry && !gb.Seen('K'))
 			{
-				Kinematics::Configure(mCode, gb, reply, error);
-				reply.catf(", arms (%.3f,%.2f,%.3f)mm, rods (%.3f,%.3f,%.3f)mm, bearingHeights (%.3f,%.2f,%.3f)mm"
+				reply.printf("Kinematics is rotary delta, arms (%.3f,%.2f,%.3f)mm, rods (%.3f,%.3f,%.3f)mm, bearingHeights (%.3f,%.2f,%.3f)mm"
 							 ", arm movement %.1f to %.1f" DEGREE_SYMBOL
 							 ", delta radius %.3f, bed radius %.1f"
 							 ", angle corrections (%.3f,%.3f,%.3f)" DEGREE_SYMBOL ,
@@ -563,7 +560,7 @@ void RotaryDeltaKinematics::PrintParameters(const StringRef& reply) const noexce
 		(double)angleCorrections[DELTA_A_AXIS], (double)angleCorrections[DELTA_B_AXIS], (double)angleCorrections[DELTA_C_AXIS]);
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 // Add a space, character, and 3-element vector to the string
 static void CatVector3(const StringRef& str, char c, const float vec[3]) noexcept
@@ -814,7 +811,5 @@ void RotaryDeltaKinematics::ForwardTransform(float Ha, float Hb, float Hc, float
 			(double)machinePos[X_AXIS], (double)machinePos[Y_AXIS], (double)machinePos[Z_AXIS]);
 	}
 }
-
-#endif // SUPPORT_ROTARY_DELTA
 
 // End

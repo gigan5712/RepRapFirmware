@@ -6,9 +6,6 @@
  */
 
 #include "WifiFirmwareUploader.h"
-
-#if HAS_WIFI_NETWORKING && (HAS_MASS_STORAGE || HAS_EMBEDDED_FILES)
-
 #include "WiFiInterface.h"
 
 #include <Platform/Platform.h>
@@ -69,7 +66,7 @@ const char * const resultMessages[] =
 // 230400b always manages to connect.
 static const uint32_t uploadBaudRates[] = { 230400, 115200, 74880, 9600 };
 
-WifiFirmwareUploader::WifiFirmwareUploader(AsyncSerial& port, WiFiInterface& iface) noexcept
+WifiFirmwareUploader::WifiFirmwareUploader(UARTClass& port, WiFiInterface& iface) noexcept
 	: uploadPort(port), interface(iface), uploadFile(nullptr), state(UploadState::idle)
 {
 }
@@ -83,7 +80,7 @@ void WifiFirmwareUploader::MessageF(const char *fmt, ...) noexcept
 {
 	va_list vargs;
 	va_start(vargs, fmt);
-	reprap.GetPlatform().MessageV(FirmwareUpdateMessage, fmt, vargs);
+	reprap.GetPlatform().MessageF(FirmwareUpdateMessage, fmt, vargs);
 	va_end(vargs);
 }
 
@@ -768,7 +765,5 @@ void WifiFirmwareUploader::SendUpdateFile(const char *file, uint32_t address) no
 	connectAttemptNumber = 0;
 	state = UploadState::resetting;
 }
-
-#endif	// HAS_WIFI_NETWORKING
 
 // End

@@ -5,6 +5,7 @@
 
 #if SUPPORT_12864_LCD
 
+#include "Pins.h"
 #include <Hardware/SharedSpi/SharedSpiDevice.h>
 
 Lcd::Lcd(PixelNumber nr, PixelNumber nc, const LcdFont * const fnts[], size_t nFonts, SpiMode mode) noexcept
@@ -502,7 +503,7 @@ void Lcd::Circle(PixelNumber x0, PixelNumber y0, PixelNumber radius, PixelMode m
 }
 
 // Draw a bitmap. x0 and numCols must be divisible by 8.
-void Lcd::BitmapImage(PixelNumber x0, PixelNumber y0, PixelNumber width, PixelNumber height, const uint8_t data[]) noexcept
+void Lcd::Bitmap(PixelNumber x0, PixelNumber y0, PixelNumber width, PixelNumber height, const uint8_t data[]) noexcept
 {
 	for (PixelNumber r = 0; r < height && r + y0 < numRows; ++r)
 	{

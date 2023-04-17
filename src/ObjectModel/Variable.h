@@ -12,21 +12,27 @@
 #include <General/FreelistManager.h>
 #include <Platform/Heap.h>
 #include <ObjectModel/ObjectModel.h>
-#include <General/function_ref.h>
 
 // Class to represent a variable having a name and a value
 class Variable
 {
 public:
-	Variable(const char *_ecv_array str, ExpressionValue pVal, int8_t pScope) noexcept;
+	friend class VariableSet;
+
+	void* operator new(size_t sz) noexcept { return FreelistManager::Allocate<Variable>(); }
+	void operator delete(void* p) noexcept { FreelistManager::Release<Variable>(p); }
+
+	Variable(const char *str, ExpressionValue pVal, int8_t pScope) noexcept;
 	~Variable();
 
 	ReadLockedPointer<const char> GetName() const noexcept { return name.Get(); }
 	ExpressionValue GetValue() const noexcept { return val; }
 	int8_t GetScope() const noexcept { return scope; }
 	void Assign(ExpressionValue ev) noexcept { val = ev; }
+	const Variable *GetNext() const noexcept { return next; }
 
 private:
+	Variable *next;
 	StringHandle name;
 	ExpressionValue val;
 	int8_t scope;								// -1 for a parameter, else the block nesting level when it was created
@@ -44,10 +50,9 @@ public:
 
 	void AssignFrom(VariableSet& other) noexcept;
 
-	Variable *Lookup(const char *_ecv_array str) noexcept;
-	const Variable *Lookup(const char *_ecv_array str) const noexcept;
-	void InsertNew(const char *str, ExpressionValue pVal, int8_t pScope) noexcept;
-	void InsertNewParameter(const char *str, ExpressionValue pVal) noexcept { InsertNew(str, pVal, -1); }
+	Variable *Lookup(const char *str) noexcept;
+	const Variable *Lookup(const char *str) const noexcept;
+	void Insert(Variable *toInsert) noexcept;
 	void EndScope(uint8_t blockNesting) noexcept;
 	void Delete(const char *str) noexcept;
 	void Clear() noexcept;
@@ -55,17 +60,7 @@ public:
 	void IterateWhile(function_ref<bool(unsigned int index, const Variable& v) /*noexcept*/ > func) const noexcept;
 
 private:
-	struct LinkedVariable
-	{
-		DECLARE_FREELIST_NEW_DELETE(LinkedVariable)
-
-		LinkedVariable(const char *_ecv_array str, ExpressionValue pVal, int8_t pScope, LinkedVariable *p_next) : next(p_next), v(str, pVal, pScope) {}
-
-		LinkedVariable * null next;
-		Variable v;
-	};
-
-	LinkedVariable * null root;
+	Variable *root;
 };
 
 #endif /* SRC_GCODES_VARIABLE_H_ */

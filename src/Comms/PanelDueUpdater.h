@@ -10,7 +10,7 @@
 
 #include <RepRapFirmware.h>
 
-#if SUPPORT_PANELDUE_FLASH
+#if HAS_AUX_DEVICES
 
 #include <General/NamedEnum.h>
 
@@ -23,8 +23,8 @@
 
 constexpr uint32_t RequiredBaudRate = 115200;
 
-constexpr const char *_ecv_array panelDueCommandEraseAndReset	= "{\"controlCommand\":\"eraseAndReset\"}\n";
-constexpr const char *_ecv_array panelDueCommandReset 		= "{\"controlCommand\":\"reset\"}\n";
+constexpr const char * panelDueCommandEraseAndReset	= "{\"controlCommand\":\"eraseAndReset\"}\n";
+constexpr const char * panelDueCommandReset 		= "{\"controlCommand\":\"reset\"}\n";
 
 constexpr uint16_t WaitMsAfterEraseAndReset = 2000;			// How long to wait in ms after eraseAndReset
 
@@ -34,7 +34,7 @@ public:
 	virtual ~PanelDueUpdater() noexcept;
 	void Spin() noexcept;
 	void Start(const StringRef& filenameRef, const uint32_t serialChan = 1) noexcept;
-	bool Idle() const noexcept { return state.RawValue() == FlashState::idle; }
+	bool Idle() const noexcept { return state == FlashState::idle; }
 
 private:
 	NamedEnum(FlashState, uint8_t,
@@ -54,17 +54,17 @@ private:
 	uint8_t serialChannel;
 	size_t currentBaudRate;
 	Samba* samba;
-	SerialPort *_ecv_from serialPort;
+	SerialPort* serialPort;
 	Device* device;
-	FlasherObserver *_ecv_from flasherObserver;
+	FlasherObserver* flasherObserver;
 	Flasher* flasher;
-	AsyncSerial::InterruptCallbackFn currentInterruptCallbackFn;
+	UARTClass::InterruptCallbackFn currentInterruptCallbackFn;
 	uint32_t offset;
 	uint32_t erasedAndResetAt;
 	FlashState state;
 	FileStore *firmwareFile;
 
-	AsyncSerial* GetAuxPort() noexcept;
+	UARTClass* GetAuxPort() noexcept;
 };
 
 #endif	// HAS_AUX_DEVICES

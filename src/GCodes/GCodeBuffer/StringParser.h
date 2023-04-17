@@ -14,7 +14,6 @@
 #include <ObjectModel/ObjectModel.h>
 #include <GCodes/GCodeException.h>
 #include <Networking/NetworkDefs.h>
-#include <Storage/CRC16.h>
 
 class GCodeBuffer;
 class IPAddress;
@@ -44,27 +43,25 @@ public:
 	bool IsLastCommand() const noexcept;
 	bool ContainsExpression() const noexcept { return seenExpression; }
 
-	bool Seen(char c) noexcept SPEED_CRITICAL;									// Is a character present?
-	bool SeenAny(Bitmap<uint32_t> bm) const noexcept;							// Return true if any of the parameter letters in the bitmap were seen
-	float GetFValue() THROWS(GCodeException) SPEED_CRITICAL;					// Get a float after a key letter
-	float GetDistance() THROWS(GCodeException) SPEED_CRITICAL;					// Get a distance or coordinate and convert it from inches to mm if necessary
-	int32_t GetIValue() THROWS(GCodeException) SPEED_CRITICAL;					// Get an integer after a key letter
+	bool Seen(char c) noexcept SPEED_CRITICAL;					// Is a character present?
+	float GetFValue() THROWS(GCodeException) SPEED_CRITICAL;	// Get a float after a key letter
+	float GetDistance() THROWS(GCodeException) SPEED_CRITICAL;	// Get a distance or coordinate and convert it from inches to mm if necessary
+	int32_t GetIValue() THROWS(GCodeException) SPEED_CRITICAL;	// Get an integer after a key letter
 	uint32_t GetUIValue() THROWS(GCodeException);								// Get an unsigned integer value
 	DriverId GetDriverId() THROWS(GCodeException);								// Get a driver ID
 	void GetIPAddress(IPAddress& returnedIp) THROWS(GCodeException);			// Get an IP address quad after a key letter
 	void GetMacAddress(MacAddress& mac) THROWS(GCodeException);					// Get a MAC address sextet after a key letter
 	void GetUnprecedentedString(const StringRef& str, bool allowEmpty) THROWS(GCodeException);	// Get a string with no preceding key letter
-	void GetCompleteParameters(const StringRef& str) const noexcept;							// Get the complete parameter string
-	void GetQuotedString(const StringRef& str, bool allowEmpty) THROWS(GCodeException);			// Get and copy a quoted string
+	void GetCompleteParameters(const StringRef& str) const noexcept;			// Get the complete parameter string
+	void GetQuotedString(const StringRef& str, bool allowEmpty) THROWS(GCodeException);	// Get and copy a quoted string
 	void GetPossiblyQuotedString(const StringRef& str, bool allowEmpty) THROWS(GCodeException);	// Get and copy a string which may or may not be quoted
-	void GetFloatArray(float arr[], size_t& length) THROWS(GCodeException) SPEED_CRITICAL; 		// Get a colon-separated list of floats after a key letter
-	void GetIntArray(int32_t arr[], size_t& length) THROWS(GCodeException);						// Get a :-separated list of ints after a key letter
-	void GetUnsignedArray(uint32_t arr[], size_t& length) THROWS(GCodeException);				// Get a :-separated list of unsigned ints after a key letter
-	void GetDriverIdArray(DriverId arr[], size_t& length) THROWS(GCodeException);				// Get a :-separated list of drivers after a key letter
+	void GetFloatArray(float arr[], size_t& length, bool doPad) THROWS(GCodeException) SPEED_CRITICAL; // Get a colon-separated list of floats after a key letter
+	void GetIntArray(int32_t arr[], size_t& length, bool doPad) THROWS(GCodeException);		// Get a :-separated list of ints after a key letter
+	void GetUnsignedArray(uint32_t arr[], size_t& length, bool doPad) THROWS(GCodeException);	// Get a :-separated list of unsigned ints after a key letter
+	void GetDriverIdArray(DriverId arr[], size_t& length) THROWS(GCodeException);	// Get a :-separated list of drivers after a key letter
 
-	void ResetIndentation() noexcept;										// Reset the indentation level to the last one
 	void SetFinished() noexcept;											// Set the G Code finished
-	void SetCommsProperties(uint32_t arg) noexcept { checksumRequired = (arg & 1); crcRequired = (arg & 4); }
+	void SetCommsProperties(uint32_t arg) noexcept { checksumRequired = (arg & 1); }
 
 #if HAS_MASS_STORAGE
 	bool OpenFileToWrite(const char* directory, const char* fileName, const FilePosition size, const bool binaryWrite, const uint32_t fileCRC32) noexcept;
@@ -124,7 +121,6 @@ private:
 	bool EvaluateCondition() THROWS(GCodeException);
 
 	void SkipWhiteSpace() noexcept;
-	void FindParameters() noexcept;
 
 	unsigned int commandStart;							// Index in the buffer of the command letter of this command
 	unsigned int parameterStart;
@@ -144,15 +140,12 @@ private:
 	uint32_t crc32;										// crc32 of the binary file
 	uint32_t whenTimerStarted;							// when we started waiting
 
+	uint8_t eofStringCounter;							// Check the EOF
+
 	uint16_t indentToSkipTo;
 	static constexpr uint16_t NoIndentSkip = 0xFFFF;	// must be greater than any real indent
 
-	CRC16 crc16;										// CRC of the characters received
-
-	uint8_t computedChecksum;							// this is the computed checksum or CRC
-	uint8_t checksumCharsReceived;						// the number of checksum characters received
-	uint8_t eofStringCounter;							// Check the EOF
-
+	uint8_t computedChecksum;
 	bool hadLineNumber;
 	bool hadChecksum;
 	bool hasCommandNumber;
@@ -166,7 +159,6 @@ private:
 	bool seenExpression;
 
 	bool checksumRequired;								// True if we only accept commands with a valid checksum
-	bool crcRequired;									// True if we only accept commands with a valid CRC, except for M409 commands
 	int8_t commandFraction;
 
 	bool binaryWriting;									// Executing gcode or writing binary file?

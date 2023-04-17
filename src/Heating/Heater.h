@@ -14,25 +14,16 @@
 #include "HeaterMonitor.h"
 #include <ObjectModel/ObjectModel.h>
 #include <Math/DeviationAccumulator.h>
-#include <RRF3Common.h>
 
 #if SUPPORT_CAN_EXPANSION
 # include "CanId.h"
 #endif
-
 
 #define TUNE_WITH_HALF_FAN	0
 
 class HeaterMonitor;
 struct CanMessageHeaterTuningReport;
 struct CanHeaterReport;
-
-#if SUPPORT_REMOTE_COMMANDS
-struct CanMessageHeaterModelNewNew;
-struct CanMessageSetHeaterTemperature;
-struct CanMessageSetHeaterMonitors;
-struct CanMessageHeaterTuningCommand;
-#endif
 
 // Enumeration to describe the status of a heater. Note that the web interface returns the numerical values, so don't change them.
 NamedEnum(HeaterStatus, uint8_t, off, standby, active, fault, tuning, offline);
@@ -57,7 +48,6 @@ public:
 	virtual void Suspend(bool sus) noexcept = 0;						// Suspend the heater to conserve power or while doing Z probing
 	virtual float GetAccumulator() const noexcept = 0;					// Get the inertial term accumulator
 	virtual void FeedForwardAdjustment(float fanPwmChange, float extrusionChange) noexcept = 0;
-	virtual void SetExtrusionFeedForward(float pwm) noexcept = 0;
 
 #if SUPPORT_CAN_EXPANSION
 	virtual bool IsLocal() const noexcept = 0;
@@ -71,7 +61,8 @@ public:
 	void SetTemperature(float t, bool activeNotStandby) THROWS(GCodeException);
 	float GetActiveTemperature() const noexcept { return activeTemperature; }
 	float GetStandbyTemperature() const noexcept { return standbyTemperature; }
-	GCodeResult SetActiveOrStandby(bool setActive, const StringRef& reply) noexcept;	// Switch from idle to active or standby
+	GCodeResult Activate(const StringRef& reply) noexcept;				// Switch from idle to active
+	void Standby() noexcept;											// Switch from active to idle
 	GCodeResult StartAutoTune(GCodeBuffer& gb, const StringRef& reply, FansBitmap fans) THROWS(GCodeException);
 																		// Start an auto tune cycle for this heater
 	void GetAutoTuneStatus(const StringRef& reply) const noexcept;		// Get the auto tune status or last result
@@ -88,13 +79,6 @@ public:
 	const FopDt& GetModel() const noexcept { return model; }			// Get the process model
 	GCodeResult SetOrReportModel(unsigned int heater, GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
 
-#if SUPPORT_REMOTE_COMMANDS
-	virtual GCodeResult TuningCommand(const CanMessageHeaterTuningCommand& msg, const StringRef& reply) noexcept = 0;
-	GCodeResult SetModel(unsigned int heater, const CanMessageHeaterModelNewNew& msg, const StringRef& reply) noexcept;
-	GCodeResult SetTemperature(const CanMessageSetHeaterTemperature& msg, const StringRef& reply) noexcept;
-	GCodeResult SetHeaterMonitors(const CanMessageSetHeaterMonitors& msg, const StringRef& reply) noexcept;
-#endif
-
 	bool IsHeaterEnabled() const noexcept								// Is this heater enabled?
 		{ return model.IsEnabled(); }
 
@@ -105,25 +89,35 @@ public:
 	void SetAsToolHeater() noexcept;
 	void SetAsBedOrChamberHeater() noexcept;
 
-	bool IsCoolingDevice() const noexcept { return model.IsInverted(); }
-
-#if SUPPORT_REMOTE_COMMANDS
-	uint8_t GetModeByte() const { return (uint8_t)GetMode(); }
-#endif
-
 protected:
 	DECLARE_OBJECT_MODEL
 	OBJECT_MODEL_ARRAY(monitors)
+
+	enum class HeaterMode : uint8_t
+	{
+		// The order of these is important because we test "mode > HeatingMode::suspended" to determine whether the heater is active
+		// and "mode >= HeatingMode::off" to determine whether the heater is either active or suspended
+		fault,
+		offline,
+		off,
+		suspended,
+		heating,
+		cooling,
+		stable,
+		// All states from here onwards must be PID tuning states because function IsTuning assumes that
+		tuning0,
+		tuning1,
+		tuning2,
+		tuning3,
+		lastTuningMode = tuning3
+	};
 
 	struct HeaterParameters
 	{
 		float heatingRate;
 		float coolingRate;
 		float deadTime;
-		float gain;
 		unsigned int numCycles;
-
-		float GetNormalGain() const noexcept { return heatingRate/coolingRate; }
 	};
 
 	virtual void ResetHeater() noexcept = 0;
@@ -139,13 +133,11 @@ protected:
 	float GetMaxTemperatureExcursion() const noexcept { return maxTempExcursion; }
 	float GetMaxHeatingFaultTime() const noexcept { return maxHeatingFaultTime; }
 	float GetTargetTemperature() const noexcept { return (active) ? activeTemperature : standbyTemperature; }
-	bool IsBedOrChamber() const noexcept { return isBedOrChamber; }
-
-	GCodeResult SetModel(float hr, float bcr, float fcr, float coolingRateExponent, float td, float maxPwm, float voltage, bool usePid, bool inverted, const StringRef& reply) noexcept;
+	GCodeResult SetModel(float hr, float coolingRateFanOff, float coolingRateFanOn, float td, float maxPwm, float voltage, bool usePid, bool inverted, const StringRef& reply) noexcept;
 															// set the process model
 	void ReportTuningUpdate() noexcept;						// tell the user what's happening
 	void CalculateModel(HeaterParameters& params) noexcept;	// calculate G, td and tc from the accumulated readings
-	void SetAndReportModelAfterTuning(bool usingFans) noexcept;
+	void SetAndReportModel(bool usingFans) noexcept;
 
 	HeaterMonitor monitors[MaxMonitorsPerHeater];			// embedding them in the Heater uses less memory than dynamic allocation
 	bool tuned;												// true if tuning was successful
@@ -157,8 +149,8 @@ protected:
 	static constexpr unsigned int MinTuningHeaterCycles = 5;
 	static constexpr unsigned int MaxTuningHeaterCycles = 25;
 	static constexpr float DefaultTuningHysteresis = 5.0;
-	static constexpr float DefaultTuningFanPwm = 0.7;
 	static constexpr float TuningPeakTempDrop = 2.0;		// must be well below TuningHysteresis
+	static constexpr float FeedForwardMultiplier = 1.3;		// how much we over-compensate feedforward to allow for heat reservoirs during tuning
 	static constexpr float HeaterSettledCoolingTimeRatio = 0.93;
 
 	// Variables used during heater tuning
@@ -198,13 +190,12 @@ private:
 	FopDt model;
 	unsigned int heaterNumber;
 	int sensorNumber;								// the sensor number used by this heater
-	float activeTemperature;						// the required active temperature
-	float standbyTemperature;						// the required standby temperature
-	float maxTempExcursion;							// the maximum temperature excursion permitted while maintaining the setpoint
-	float maxHeatingFaultTime;						// how long a heater fault is permitted to persist before a heater fault is raised
+	float activeTemperature;						// The required active temperature
+	float standbyTemperature;						// The required standby temperature
+	float maxTempExcursion;							// The maximum temperature excursion permitted while maintaining the setpoint
+	float maxHeatingFaultTime;						// How long a heater fault is permitted to persist before a heater fault is raised
 
-	bool isBedOrChamber;							// true if this was a bed or chamber heater when we were switched on
-	bool active;									// are we active or standby?
+	bool active;									// Are we active or standby?
 	bool modelSetByUser;
 	bool monitorsSetByUser;
 };

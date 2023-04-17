@@ -15,9 +15,7 @@ enum class ExpansionBoardType : uint8_t
 	none,
 	DueX0,
 	DueX2,
-	DueX2_v0_11 = (uint8_t)DueX2 + 1,
-	DueX5,
-	DueX5_v0_11 = (uint8_t)DueX5 + 1
+	DueX5
 };
 
 namespace DuetExpansion
@@ -34,6 +32,6 @@ namespace DuetExpansion
 	void AnalogOut(Pin pin, float pwm) noexcept;							// Set the PWM value on this pin
 	uint16_t DiagnosticRead() noexcept;										// Diagnose the SX1509 by setting all pins as inputs and reading them
 	void Diagnostics(MessageType mtype) noexcept;							// Print diagnostic data
-}
+};
 
 #endif /* SRC_DUETNG_DUEXN_H_ */

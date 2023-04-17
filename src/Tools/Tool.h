@@ -44,13 +44,14 @@ class Tool INHERIT_OBJECT_MODEL
 public:
 	friend class RepRap;
 
-	DECLARE_FREELIST_NEW_DELETE(Tool)
+	void* operator new(size_t sz) noexcept { return FreelistManager::Allocate<Tool>(); }
+	void operator delete(void* p) noexcept { FreelistManager::Release<Tool>(p); }
 
 	~Tool() override { delete name; }
 
 	static Tool *Create(
 			unsigned int toolNumber,
-			const char *_ecv_array toolName,
+			const char *toolName,
 			int32_t d[], size_t dCount,
 			int32_t h[], size_t hCount,
 			AxesBitmap xMap,
@@ -69,21 +70,21 @@ public:
 	void SetOffset(size_t axis, float offs, bool byProbing) noexcept pre(axis < MaxAxes);
 	AxesBitmap GetAxisOffsetsProbed() const noexcept { return axisOffsetsProbed; }
 	size_t DriveCount() const noexcept;
-	int GetDrive(size_t driveNumber) const noexcept pre(driverNumber < DriveCount());
+	int Drive(size_t driveNumber) const noexcept;
 	bool ToolCanDrive(bool extrude) noexcept;
 	size_t HeaterCount() const noexcept;
-	int GetHeater(size_t heaterNumber) const noexcept pre(heaterNumber < HeaterCount());
-	const char *_ecv_array GetName() const noexcept;
+	int Heater(size_t heaterNumber) const noexcept;
+	const char *GetName() const noexcept;
 	int Number() const noexcept;
 	void DefineMix(const float m[]) noexcept;
-	const float *_ecv_array GetMix() const noexcept;
-	void PrintTool(const StringRef& reply) const noexcept;
+	const float* GetMix() const noexcept;
+	void Print(const StringRef& reply) const noexcept;
 	AxesBitmap GetXAxisMap() const noexcept { return axisMapping[0]; }
 	AxesBitmap GetYAxisMap() const noexcept { return axisMapping[1]; }
 	FansBitmap GetFanMapping() const noexcept { return fanMapping; }
 	Filament *GetFilament() const noexcept { return filament; }
 	const char *GetFilamentName() const noexcept;
-	Tool *null Next() const noexcept { return next; }
+	Tool *Next() const noexcept { return next; }
 	ToolState GetState() const noexcept { return state; }
 
 	bool IsRetracted() const noexcept { return isRetracted; }
@@ -97,17 +98,15 @@ public:
 	uint32_t GetSpindleRpm() const noexcept { return spindleRpm; }
 	void SetSpindleRpm(uint32_t rpm) THROWS(GCodeException);
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteSettings(FileStore *f) const noexcept;							// write the tool's settings to file
 #endif
 
 	float GetToolHeaterActiveTemperature(size_t heaterNumber) const noexcept;
 	float GetToolHeaterStandbyTemperature(size_t heaterNumber) const noexcept;
-	void SetToolHeaterActiveTemperature(size_t heaterNumber, float temp) THROWS(GCodeException) { SetToolHeaterActiveOrStandbyTemperature(heaterNumber, temp, true); }
-	void SetToolHeaterStandbyTemperature(size_t heaterNumber, float temp) THROWS(GCodeException) { SetToolHeaterActiveOrStandbyTemperature(heaterNumber, temp, false); }
-
+	void SetToolHeaterActiveTemperature(size_t heaterNumber, float temp) THROWS(GCodeException);
+	void SetToolHeaterStandbyTemperature(size_t heaterNumber, float temp) THROWS(GCodeException);
 	GCodeResult SetFirmwareRetraction(GCodeBuffer& gb, const StringRef& reply, OutputBuffer*& outBuf) THROWS(GCodeException);
-	GCodeResult GetSetFeedForward(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
 
 	bool HasTemperatureFault() const noexcept { return heaterFault; }
 
@@ -118,11 +117,8 @@ public:
 	void SetFansPwm(float f) const noexcept;
 
 	void HeatersToOff() const noexcept;
-	void HeatersToActiveOrStandby(bool active) const noexcept;
-
-
-	void ApplyFeedForward(float extrusionSpeed) const noexcept;
-	void StopFeedForward() const noexcept;
+	void HeatersToActive() const noexcept;
+	void HeatersToStandby() const noexcept;
 
 protected:
 	DECLARE_OBJECT_MODEL
@@ -133,7 +129,6 @@ protected:
 	OBJECT_MODEL_ARRAY(mix)
 	OBJECT_MODEL_ARRAY(offsets)
 	OBJECT_MODEL_ARRAY(standbyTemps)
-	OBJECT_MODEL_ARRAY(feedForward)
 
 	void Activate() noexcept;
 	void Standby() noexcept;
@@ -145,27 +140,25 @@ protected:
 private:
 	Tool() noexcept : next(nullptr), filament(nullptr), name(nullptr), state(ToolState::off) { }
 
-	void SetToolHeaterActiveOrStandbyTemperature(size_t heaterNumber, float temp, bool active) THROWS(GCodeException);
 	void SetTemperatureFault(int8_t dudHeater) noexcept;
 	void ResetTemperatureFault(int8_t wasDudHeater) noexcept;
 	bool AllHeatersAtHighTemperature(bool forExtrusion) const noexcept;
 
 	static void ToolUpdated() noexcept { reprap.ToolsUpdated(); }	// call this whenever we change a variable that is reported in the OM as non-live
 
-	Tool* null next;
+	Tool* next;
 	Filament *filament;
 	int filamentExtruder;
-	const char *_ecv_array name;
+	const char *name;
 	float offset[MaxAxes];
 	float mix[MaxExtrudersPerTool];
 	float activeTemperatures[MaxHeatersPerTool];
 	float standbyTemperatures[MaxHeatersPerTool];
-	float heaterFeedForward[MaxHeatersPerTool];
 
 	// Firmware retraction settings
 	float retractLength, retractExtra;			// retraction length and extra length to un-retract
-	float retractSpeed;							// retract speed in mm per step clock
-	float unRetractSpeed;						// un-retract speed in mm per step clock
+	float retractSpeed;							// retract speed in mm/min
+	float unRetractSpeed;						// un=retract speed in mm/min
 	float retractHop;							// Z hop when retracting
 
 	FansBitmap fanMapping;
@@ -187,7 +180,7 @@ private:
 	volatile bool displayColdExtrudeWarning;
 };
 
-inline int Tool::GetDrive(size_t driveNumber) const noexcept
+inline int Tool::Drive(size_t driveNumber) const noexcept
 {
 	return drives[driveNumber];
 }
@@ -197,7 +190,7 @@ inline size_t Tool::HeaterCount() const noexcept
 	return heaterCount;
 }
 
-inline int Tool::GetHeater(size_t heaterNumber) const noexcept
+inline int Tool::Heater(size_t heaterNumber) const noexcept
 {
 	return heaters[heaterNumber];
 }

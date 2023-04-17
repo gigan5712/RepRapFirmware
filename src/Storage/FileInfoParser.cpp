@@ -12,7 +12,7 @@
 #include <PrintMonitor/PrintMonitor.h>
 #include <GCodes/GCodes.h>
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 FileInfoParser::FileInfoParser() noexcept
 	: parseState(notParsing), fileBeingParsed(nullptr), accumulatedParseTime(0), accumulatedReadTime(0), accumulatedSeekTime(0), fileOverlapLength(0)
@@ -25,7 +25,7 @@ FileInfoParser::FileInfoParser() noexcept
 GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& info, bool quitEarly) noexcept
 {
 	MutexLocker lock(parserMutex, MAX_FILEINFO_PROCESS_TIME);
-	if (!lock.IsAcquired())
+	if (!lock)
 	{
 		return GCodeResult::notFinished;
 	}
@@ -68,9 +68,7 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 		// Set up the info struct
 		parsedFileInfo.Init();
 		parsedFileInfo.fileSize = fileBeingParsed->Length();
-#if HAS_MASS_STORAGE
 		parsedFileInfo.lastModifiedTime = MassStorage::GetLastModifiedTime(filePath);
-#endif
 		parsedFileInfo.isValid = true;
 
 		// Record some debug values here
@@ -81,18 +79,8 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 		}
 
 		// If the file is empty or not a G-Code file, we don't need to parse anything
-		constexpr const char *GcodeFileExtensions[] = { ".gcode", ".g", ".gco", ".gc", ".nc" };
-		bool isGcodeFile = false;
-		for (const char *ext : GcodeFileExtensions)
-		{
-			if (StringEndsWithIgnoreCase(filePath, ext))
-			{
-				isGcodeFile = true;
-				break;
-			}
-		}
-
-		if (fileBeingParsed->Length() == 0 || !isGcodeFile)
+		if (fileBeingParsed->Length() == 0 || (!StringEndsWithIgnoreCase(filePath, ".gcode") && !StringEndsWithIgnoreCase(filePath, ".g")
+					&& !StringEndsWithIgnoreCase(filePath, ".gco") && !StringEndsWithIgnoreCase(filePath, ".gc")))
 		{
 			fileBeingParsed->Close();
 			parsedFileInfo.incomplete = false;
@@ -126,7 +114,6 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 				}
 
 				uint32_t startTime = millis();
-				const FilePosition bufferStartFileOffset = fileBeingParsed->Position() - fileOverlapLength;
 				const int nbytes = fileBeingParsed->Read(&buf[fileOverlapLength], sizeToRead);
 				if (nbytes != (int)sizeToRead)
 				{
@@ -150,6 +137,12 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 					headerInfoComplete &= (parsedFileInfo.numFilaments != 0);
 				}
 
+				// Look for first layer height
+				if (parsedFileInfo.firstLayerHeight == 0.0)
+				{
+					headerInfoComplete &= FindFirstLayerHeight(buf, sizeToScan);
+				}
+
 				// Look for layer height
 				if (parsedFileInfo.layerHeight == 0.0)
 				{
@@ -167,9 +160,6 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 				{
 					headerInfoComplete &= FindPrintTime(buf);
 				}
-
-				// Look for thumbnail images
-				headerInfoComplete &= FindThumbnails(buf, bufferStartFileOffset);
 
 				// Keep track of the time stats
 				accumulatedParseTime += millis() - startTime;
@@ -204,7 +194,6 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 		case seeking:
 			// Seeking into a large file can take a long time using the FAT file system, so do it in stages
 			{
-#if HAS_MASS_STORAGE
 				FilePosition currentPos = fileBeingParsed->Position();
 				const uint32_t clsize = fileBeingParsed->ClusterSize();
 				if (currentPos/clsize > nextSeekPos/clsize)
@@ -212,14 +201,12 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 					// Seeking backwards over a cluster boundary, so in practice the seek will start from the start of the file
 					currentPos = 0;
 				}
+
 				// Seek at most 512 clusters at a time
 				const FilePosition maxSeekDistance = 512 * (FilePosition)clsize;
 				const bool doFullSeek = (nextSeekPos <= currentPos + maxSeekDistance);
 				const FilePosition thisSeekPos = (doFullSeek) ? nextSeekPos : currentPos + maxSeekDistance;
-#elif HAS_EMBEDDED_FILES
-				const bool doFullSeek = true;
-				const FilePosition thisSeekPos = nextSeekPos;
-#endif
+
 				const uint32_t startTime = millis();
 				if (!fileBeingParsed->Seek(thisSeekPos))
 				{
@@ -299,13 +286,6 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 					}
 				}
 
-				// Search for number of layers
-				if (parsedFileInfo.numLayers == 0)
-				{
-					// Number of layers should come before the object height
-					(void)FindNumLayers(buf, sizeToScan);
-				}
-
 				// Look for print time
 				if (parsedFileInfo.printTime == 0)
 				{
@@ -338,10 +318,6 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 					}
 					parseState = notParsing;
 					fileBeingParsed->Close();
-					if (parsedFileInfo.numLayers == 0 && parsedFileInfo.layerHeight > 0.0 && parsedFileInfo.objectHeight > 0.0)
-					{
-						parsedFileInfo.numLayers = lrintf(parsedFileInfo.objectHeight / parsedFileInfo.layerHeight);
-					}
 					parsedFileInfo.incomplete = false;
 					info = parsedFileInfo;
 					return GCodeResult::ok;
@@ -372,6 +348,71 @@ GCodeResult FileInfoParser::GetFileInfo(const char *filePath, GCodeFileInfo& inf
 		return GCodeResult::ok;
 	}
 	return GCodeResult::notFinished;
+}
+
+// Scan the buffer for a G1 Zxxx command. The buffer is null-terminated.
+bool FileInfoParser::FindFirstLayerHeight(const char* bufp, size_t len) noexcept
+{
+	if (len < 4)
+	{
+		// Don't start if the buffer is not big enough
+		return false;
+	}
+	parsedFileInfo.firstLayerHeight = 0.0;
+
+	bool inComment = false, inRelativeMode = false, foundHeight = false;
+	for(size_t i = 0; i < len - 4; i++)
+	{
+		if (bufp[i] == ';')
+		{
+			inComment = true;
+		}
+		else if (inComment)
+		{
+			if (bufp[i] == '\n')
+			{
+				inComment = false;
+			}
+		}
+		else if (bufp[i] == 'G')
+		{
+			// See if we can switch back to absolute mode
+			if (inRelativeMode)
+			{
+				inRelativeMode = !(bufp[i + 1] == '9' && bufp[i + 2] == '0' && bufp[i + 3] <= ' ');
+			}
+			// Ignore G0/G1 codes if in relative mode
+			else if (bufp[i + 1] == '9' && bufp[i + 2] == '1' && bufp[i + 3] <= ' ')
+			{
+				inRelativeMode = true;
+			}
+			// Look for "G0/G1 ... Z#HEIGHT#" command
+			else if ((bufp[i + 1] == '0' || bufp[i + 1] == '1') && bufp[i + 2] == ' ')
+			{
+				for(i += 3; i < len - 4; i++)
+				{
+					if (bufp[i] == 'Z')
+					{
+						//debugPrintf("Found at offset %u text: %.100s\n", i, &buf[i + 1]);
+						const float flHeight = SafeStrtof(&bufp[i + 1], nullptr);
+						if ((parsedFileInfo.firstLayerHeight == 0.0 || flHeight < parsedFileInfo.firstLayerHeight) && (flHeight <= reprap.GetPlatform().GetNozzleDiameter() * 3.0))
+						{
+							parsedFileInfo.firstLayerHeight = flHeight;				// Only report first Z height if it's somewhat reasonable
+							foundHeight = true;
+							// NB: Don't stop here, because some slicers generate two Z moves at the beginning
+						}
+						break;
+					}
+					else if (bufp[i] == ';')
+					{
+						// Ignore comments
+						break;
+					}
+				}
+			}
+		}
+	}
+	return foundHeight;
 }
 
 // Scan the buffer for a G1 Zxxx command. The buffer is null-terminated.
@@ -485,51 +526,6 @@ bool FileInfoParser::FindHeight(const char* bufp, size_t len) noexcept
 		}
 	}
 	return foundHeight;
-}
-
-// Scan the buffer for th total number of layers. The buffer is null-terminated.
-bool FileInfoParser::FindNumLayers(const char* bufp, size_t len) noexcept
-{
-	static const char* const numLayerStrings[] =
-	{
-		"num_layers",
-		"NUM_LAYERS"
-	};
-
-	if (*bufp != 0)
-	{
-		++bufp;														// make sure we can look back 1 character after we find a match
-		for (const char * lhStr : numLayerStrings)					// search for each string in turn
-		{
-			const char *pos = bufp;
-			for(;;)													// loop until success or strstr returns null
-			{
-				pos = strstr(pos, lhStr);
-				if (pos == nullptr)
-				{
-					break;											// didn't find this string in the buffer, so try the next string
-				}
-
-				const char c = pos[-1];								// fetch the previous character
-				pos += strlen(lhStr);								// skip the string we matched
-				if (c == ' ' || c == ';' || c == '\t')				// check we are not in the middle of a word
-				{
-					while (strchr(" \t=:,", *pos) != nullptr)		// skip the possible separators
-					{
-						++pos;
-					}
-					const unsigned int val = StrToU32(pos);
-					if (val > 0)
-					{
-						parsedFileInfo.numLayers = val;
-						return true;
-					}
-				}
-			}
-		}
-	}
-
-	return false;
 }
 
 // Scan the buffer for the layer height. The buffer is null-terminated.
@@ -676,21 +672,22 @@ void FileInfoParser::FindFilamentUsedEmbedded(const char* p, const char *s1, con
 unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 {
 	unsigned int filamentsFound = 0;
+	const size_t maxFilaments = reprap.GetGCodes().GetNumExtruders();
 
 	// Look for filament usage as generated by Slic3r and Cura
 	const char* const filamentUsedStr1 = "ilament used";			// comment string used by slic3r and Cura, followed by filament used and "mm"
 	const char* p = bufp;
-	while (filamentsFound < MaxFilaments &&	(p = strstr(p, filamentUsedStr1)) != nullptr)
+	while (filamentsFound < maxFilaments &&	(p = strstr(p, filamentUsedStr1)) != nullptr)
 	{
 		p += strlen(filamentUsedStr1);
 		while(strchr(" [m]:=\t", *p) != nullptr)					// Prusa slicer now uses "; filament used [mm] = 4235.9"
 		{
 			++p;	// this allows for " = " from default slic3r comment and ": " from default Cura comment
 		}
-		while (isDigit(*p) && filamentsFound < MaxFilaments)
+		while (isDigit(*p) && filamentsFound < maxFilaments)
 		{
 			const char* q;
-			const float filamentLength = SafeStrtof(p, &q);
+			float filamentLength = SafeStrtof(p, &q);
 			p = q;
 			if (!std::isnan(filamentLength) && !std::isinf(filamentLength))
 			{
@@ -728,7 +725,7 @@ unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 	{
 		const char *filamentLengthStr = "ilament length";	// comment string used by S3D
 		p = bufp;
-		while (filamentsFound < MaxFilaments &&	(p = strstr(p, filamentLengthStr)) != nullptr)
+		while (filamentsFound < maxFilaments &&	(p = strstr(p, filamentLengthStr)) != nullptr)
 		{
 			p += strlen(filamentLengthStr);
 			while(strchr(" :=\t", *p) != nullptr)
@@ -737,7 +734,7 @@ unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 			}
 			if (isDigit(*p))
 			{
-				const float filamentLength = SafeStrtof(p, nullptr);
+				float filamentLength = SafeStrtof(p, nullptr);
 				if (!std::isnan(filamentLength) && !std::isinf(filamentLength))
 				{
 					parsedFileInfo.filamentNeeded[filamentsFound] = filamentLength;
@@ -752,7 +749,7 @@ unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 	{
 		const char *filamentLengthStr = ";    Ext ";
 		p = bufp;
-		while (filamentsFound < MaxFilaments && (p = strstr(p, filamentLengthStr)) != nullptr)
+		while (filamentsFound < maxFilaments && (p = strstr(p, filamentLengthStr)) != nullptr)
 		{
 			p += strlen(filamentLengthStr);
 			if (*p == '#')
@@ -770,7 +767,7 @@ unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 
 			if (isDigit(*p))
 			{
-				const float filamentLength = SafeStrtof(p, nullptr);
+				float filamentLength = SafeStrtof(p, nullptr);
 				if (!std::isnan(filamentLength) && !std::isinf(filamentLength))
 				{
 					parsedFileInfo.filamentNeeded[filamentsFound] = filamentLength;
@@ -797,7 +794,7 @@ unsigned int FileInfoParser::FindFilamentUsed(const char* bufp) noexcept
 			const float filamentCMM = SafeStrtof(p + strlen(filamentVolumeStr), nullptr) * multipler;
 			if (!std::isnan(filamentCMM) && !std::isinf(filamentCMM))
 			{
-				parsedFileInfo.filamentNeeded[filamentsFound++] = filamentCMM / (Pi * fsquare(reprap.GetPlatform().GetFilamentWidth() * 0.5));
+				parsedFileInfo.filamentNeeded[filamentsFound++] = filamentCMM / (Pi * fsquare(reprap.GetPlatform().GetFilamentWidth() / 2.0));
 			}
 		}
 	}
@@ -811,13 +808,12 @@ bool FileInfoParser::FindPrintTime(const char* bufp) noexcept
 	static const char* const PrintTimeStrings[] =
 	{
 		// Note: if a string in this table is a leading or embedded substring of another, the longer one must come first
-		" estimated printing time (normal mode)",	// slic3r PE later versions			"; estimated printing time (normal mode) = 2d 1h 5m 24s"
-		" estimated printing time",					// slic3r PE older versions			"; estimated printing time = 1h 5m 24s"
-		";TIME",									// Cura								";TIME:38846"
-		" Build time",								// S3D								";   Build time: 0 hours 42 minutes"
-													// also REALvision					"; Build time: 2:11:47"
-		" Build Time",								// KISSlicer						"; Estimated Build Time:   332.83 minutes"
-													// also KISSSlicer 2 alpha			"; Calculated-during-export Build Time: 130.62 minutes"
+		" estimated printing time (normal mode)",	// slic3r PE later versions	"; estimated printing time (normal mode) = 1h 5m 24s"
+		" estimated printing time",					// slic3r PE older versions	"; estimated printing time = 1h 5m 24s"
+		";TIME",									// Cura						";TIME:38846"
+		" Build time",								// S3D						";   Build time: 0 hours 42 minutes"
+		" Build Time",								// KISSlicer				"; Estimated Build Time:   332.83 minutes"
+													// also KISSSlicer 2 alpha	"; Calculated-during-export Build Time: 130.62 minutes"
 		";Print Time:",								// Ideamaker
 		";PRINT.TIME:",								// Patio
 		";Print time:",								// Fusion 360
@@ -835,7 +831,7 @@ bool FileInfoParser::FindPrintTime(const char* bufp) noexcept
 				++pos;
 			}
 			const char * const q = pos;
-			float days = 0.0, hours = 0.0, minutes = 0.0;
+			float hours = 0.0, minutes = 0.0;
 			float secs = SafeStrtof(pos, &pos);
 			if (q != pos)
 			{
@@ -843,86 +839,50 @@ bool FileInfoParser::FindPrintTime(const char* bufp) noexcept
 				{
 					++pos;
 				}
-				if (*pos == ':')											// special code for REALvision
+				if (*pos == 'h')
+				{
+					hours = secs;
+					if (StringStartsWithIgnoreCase(pos, "hours"))		// S3D
+					{
+						pos += 5;
+					}
+					else if (StringStartsWithIgnoreCase(pos, "hour"))	// S3D now prints "1 hour 42 minutes"
+					{
+						pos += 4;
+					}
+					else
+					{
+						++pos;
+					}
+					secs = SafeStrtof(pos, &pos);
+					while (*pos == ' ' || *pos == ':')					// Fusion 360 gives e.g. ";Print time: 40m:36s"
+					{
+						++pos;
+					}
+				}
+				if (*pos == 'm')
 				{
 					minutes = secs;
-					secs = SafeStrtof(pos + 1, &pos);
-					if (*pos == ':')
+					if (StringStartsWithIgnoreCase(pos, "minutes"))
 					{
-						hours = minutes;
-						minutes = secs;
-						secs = SafeStrtof(pos + 1, &pos);
-						// I am assuming that it stops at hours
+						pos += 7;
 					}
-				}
-				else
-				{
-					if (*pos == 'd')
+					else if (StringStartsWithIgnoreCase(pos, "minute"))	// assume S3D also prints "1 minute"
 					{
-						days = secs;
-						if (StringStartsWithIgnoreCase(pos, "day"))			// not sure if any slicer needs this, but include it j.i.c.
-						{
-							pos += 3;
-							if (*pos == 's')
-							{
-								++pos;
-							}
-						}
-						else
-						{
-							++pos;
-						}
-						secs = SafeStrtof(pos, &pos);
-						while (*pos == ' ' || *pos == ':')
-						{
-							++pos;
-						}
+						pos += 6;
 					}
-					if (*pos == 'h')
+					else if (StringStartsWithIgnoreCase(pos, "min"))	// Fusion 360
 					{
-						hours = secs;
-						if (StringStartsWithIgnoreCase(pos, "hour"))		// S3D
-						{
-							pos += 4;
-							if (*pos == 's')
-							{
-								++pos;
-							}
-						}
-						else
-						{
-							++pos;
-						}
-						secs = SafeStrtof(pos, &pos);
-						while (*pos == ' ' || *pos == ':')					// Fusion 360 gives e.g. ";Print time: 40m:36s"
-						{
-							++pos;
-						}
+						pos += 3;
 					}
-					if (*pos == 'm')
+					else
 					{
-						minutes = secs;
-						if (StringStartsWithIgnoreCase(pos, "minute"))
-						{
-							pos += 6;
-							if (*pos == 's')
-							{
-								++pos;
-							}
-						}
-						else if (StringStartsWithIgnoreCase(pos, "min"))	// Fusion 360
-						{
-							pos += 3;
-						}
-						else
-						{
-							++pos;
-						}
-						secs = SafeStrtof(pos, &pos);
+						++pos;
 					}
+					secs = SafeStrtof(pos, &pos);
 				}
 			}
-			parsedFileInfo.printTime = lrintf(((days * 24.0 + hours) * 60.0 + minutes) * 60.0 + secs);
+			parsedFileInfo.printTime = lrintf((hours * 60.0 + minutes) * 60.0 + secs);
 			return true;
 		}
 	}
@@ -949,107 +909,6 @@ bool FileInfoParser::FindSimulatedTime(const char* bufp) noexcept
 		}
 	}
 	return false;
-}
-
-// Search for embedded thumbnail images that start in the buffer
-// Subsequent calls pass a buffer that overlaps with the previous one, so take care to avoid finding the same one twice.
-// The overlap is small enough that we can discount the possibility of finding more than one thumbnail header in the overlap area.
-// Return true if we have no room to store further thumbnails, or we are certain that we have found all the thumbnails in the file.
-// Thumbnail data is preceded by comment lines of the following form:
-//	; thumbnail_QOI begin 32x32 2140
-// or
-//	; thumbnail begin 32x32 2140
-bool FileInfoParser::FindThumbnails(const char *_ecv_array bufp, FilePosition bufferStartFilePosition) noexcept
-{
-	// Find the next free slot in which to store thumbnail data
-	size_t thumbnailIndex = 0;
-	for (thumbnailIndex = 0; parsedFileInfo.thumbnails[thumbnailIndex].IsValid(); )
-	{
-		++thumbnailIndex;
-		if (thumbnailIndex == MaxThumbnails)
-		{
-			return true;		// no more space to store thumbnail info
-		}
-	}
-
-	constexpr const char *_ecv_array ThumbnailText = "; thumbnail";
-	constexpr const char *_ecv_array QoiBeginText = "_QOI begin ";
-	constexpr const char *_ecv_array JpegBeginText = "_JPG begin ";
-	constexpr const char *_ecv_array PngBeginText = " begin ";
-
-	const char *_ecv_array pos = bufp;
-	while (true)
-	{
-		pos = strstr(pos, ThumbnailText);
-		if (pos == nullptr)
-		{
-			return false;
-		}
-
-		pos += strlen(ThumbnailText);
-		GCodeFileInfo::ThumbnailInfo::Format fmt(GCodeFileInfo::ThumbnailInfo::Format::qoi);
-		if (StringStartsWith(pos, QoiBeginText))
-		{
-			// found a QOI thumbnail
-			pos += strlen(QoiBeginText);
-		}
-		else if (StringStartsWith(pos, PngBeginText))
-		{
-			// found a PNG thumbnail
-			pos += strlen(PngBeginText);
-			fmt = GCodeFileInfo::ThumbnailInfo::Format::png;
-		}
-		else if (StringStartsWith(pos, JpegBeginText))
-		{
-			// found a JPEG thumbnail
-			pos += strlen(JpegBeginText);
-			fmt = GCodeFileInfo::ThumbnailInfo::Format::jpeg;
-		}
-		else
-		{
-			continue;		// unrecognised format, so look for another one
-		}
-
-		// Store this thumbnail data
-		const char *_ecv_array npos;
-		const uint32_t w = StrToU32(pos, &npos);
-		if (w >= 16 && w <= 500 && *npos == 'x')
-		{
-			pos = npos + 1;
-			const uint32_t h = StrToU32(pos, &npos);
-			if (h >= 16 && h <= 500 && *npos == ' ')
-			{
-				pos = npos + 1;
-				const uint32_t size = StrToU32(pos, &npos);
-				if (size >= 10)
-				{
-					pos = npos;
-					while (*pos == ' ' || *pos == '\r' || *pos == '\n')
-					{
-						++pos;
-					}
-					if (*pos == ';')
-					{
-						const FilePosition offset = bufferStartFilePosition + (pos - bufp);
-						if (thumbnailIndex == 0 || offset != parsedFileInfo.thumbnails[thumbnailIndex - 1].offset)
-						{
-							GCodeFileInfo::ThumbnailInfo& th = parsedFileInfo.thumbnails[thumbnailIndex];
-							th.width = w;
-							th.height = h;
-							th.size = size;
-							th.format = fmt;
-							th.offset = offset;
-							++thumbnailIndex;
-							if (thumbnailIndex == MaxThumbnails)
-							{
-								return true;		// no more space to store thumbnail info
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 }
 
 #endif

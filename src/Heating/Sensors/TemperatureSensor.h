@@ -56,7 +56,7 @@ public:
 	TemperatureError GetLastError() const noexcept { return lastRealError; }
 
 	// Configure the sensor name, if it is provided
-	void TryConfigureSensorName(GCodeBuffer& gb, bool& seen) THROWS(GCodeException);
+	void TryConfigureSensorName(GCodeBuffer& gb, bool& seen);
 
 	// Set the name - normally called only once
 	void SetSensorName(const char *newName) noexcept;
@@ -91,6 +91,7 @@ public:
 
 	// Try to get a temperature reading
 	virtual void Poll() noexcept = 0;
+	virtual bool PollInTask() noexcept { return false; };		// Classes implementing this method need to also call Heat::EnsureSensorsTask() after successful configuration
 
 	static TemperatureError GetPT100Temperature(float& t, uint16_t ohmsx100) noexcept;		// shared function used by two derived classes and the ATE
 

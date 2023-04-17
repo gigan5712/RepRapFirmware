@@ -64,7 +64,7 @@ constexpr ObjectModelTableEntry ZLeadscrewKinematics::objectModelTable[] =
 
 constexpr uint8_t ZLeadscrewKinematics::objectModelTableDescriptor[] = { 2, 1, 6 };
 
-DEFINE_GET_OBJECT_MODEL_TABLE_WITH_PARENT(ZLeadscrewKinematics, Kinematics)
+DEFINE_GET_OBJECT_MODEL_TABLE(ZLeadscrewKinematics)
 
 #endif
 
@@ -421,7 +421,7 @@ void ZLeadscrewKinematics::AppendCorrections(const floatc_t corrections[], const
 	}
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 // Write any calibration data that we need to resume a print after power fail, returning true if successful
 bool ZLeadscrewKinematics::WriteResumeSettings(FileStore *f) const noexcept

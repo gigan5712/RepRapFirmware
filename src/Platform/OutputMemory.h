@@ -11,53 +11,55 @@
 #include <RepRapFirmware.h>
 #include <Storage/FileData.h>
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 const size_t OUTPUT_STACK_DEPTH = 64;	// Number of OutputBuffer chains that can be pushed onto one stack instance
 #else
 const size_t OUTPUT_STACK_DEPTH = 4;	// Number of OutputBuffer chains that can be pushed onto one stack instance
 #endif
 
+class OutputStack;
+
 // This class is used to hold data for sending (either for Serial or Network destinations)
 class OutputBuffer
 {
 public:
-	explicit OutputBuffer(OutputBuffer *null n) noexcept : next(n) { }
+	friend class OutputStack;
+
+	OutputBuffer(OutputBuffer *n) noexcept : next(n) { }
 	OutputBuffer(const OutputBuffer&) = delete;
 
 	void Append(OutputBuffer *other) noexcept;
-	OutputBuffer *null Next() const noexcept { return next; }
+	OutputBuffer *Next() const noexcept { return next; }
 	bool IsReferenced() const noexcept { return isReferenced; }
 	bool HadOverflow() const noexcept { return hadOverflow; }
 	void IncreaseReferences(size_t refs) noexcept;
 
-	const char *_ecv_array Data() const noexcept { return data; }
-	const char *_ecv_array UnreadData() const noexcept { return data + bytesRead; }
+	const char *Data() const noexcept { return data; }
+	const char *UnreadData() const noexcept { return data + bytesRead; }
 	size_t DataLength() const noexcept { return dataLength; }	// How many bytes have been written to this instance?
 	size_t Length() const noexcept;								// How many bytes have been written to the whole chain?
 
+	char& operator[](size_t index) noexcept;
 	char operator[](size_t index) const noexcept;
-	const char *_ecv_array Read(size_t len) noexcept;
+	const char *Read(size_t len) noexcept;
 	void Taken(size_t len) noexcept { bytesRead += len; }
 	size_t BytesLeft() const noexcept { return dataLength - bytesRead; }	// How many bytes have not been sent yet?
 
-	uint32_t WhenQueued() const noexcept { return whenQueued; }
-	void UpdateWhenQueued() noexcept;
-
-	size_t vprintf(const char *_ecv_array fmt, va_list vargs) noexcept;
-	size_t printf(const char *_ecv_array fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
-	size_t vcatf(const char *_ecv_array fmt, va_list vargs) noexcept;
-	size_t catf(const char *_ecv_array fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
-	size_t lcatf(const char *_ecv_array fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
+	size_t vprintf(const char *fmt, va_list vargs) noexcept;
+	size_t printf(const char *fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
+	size_t vcatf(const char *fmt, va_list vargs) noexcept;
+	size_t catf(const char *fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
+	size_t lcatf(const char *fmt, ...) noexcept __attribute__ ((format (printf, 2, 3)));
 
 	size_t copy(const char c) noexcept;
-	size_t copy(const char *_ecv_array src) noexcept;
-	size_t copy(const char *_ecv_array src, size_t len) noexcept;
+	size_t copy(const char *src) noexcept;
+	size_t copy(const char *src, size_t len) noexcept;
 
 	size_t cat(const char c) noexcept;
-	size_t cat(const char *_ecv_array src) noexcept;
-	size_t lcat(const char *_ecv_array src) noexcept;
-	size_t cat(const char *_ecv_array src, size_t len) noexcept;
-	size_t lcat(const char *_ecv_array src, size_t len) noexcept;
+	size_t cat(const char *src) noexcept;
+	size_t lcat(const char *src) noexcept;
+	size_t cat(const char *src, size_t len) noexcept;
+	size_t lcat(const char *src, size_t len) noexcept;
 	size_t cat(StringRef &str) noexcept;
 
 	size_t EncodeChar(char c) noexcept;
@@ -83,7 +85,7 @@ public:
 	static size_t Truncate(OutputBuffer *buffer, size_t bytesNeeded) noexcept;
 
 	// Release one OutputBuffer instance. Returns the next item from the chain or nullptr if this was the last instance.
-	__attribute__((warn_unused_result)) static OutputBuffer *Release(OutputBuffer *buf) noexcept;
+	__attribute((warn_unused_result)) static OutputBuffer *Release(OutputBuffer *buf) noexcept;
 
 	// Release all OutputBuffer objects in a chain
 	static void ReleaseAll(OutputBuffer * volatile &buf) noexcept;
@@ -95,10 +97,10 @@ public:
 private:
 	void Clear() noexcept;
 
-	OutputBuffer *null next;
+	OutputBuffer *next;
 	OutputBuffer *last;
 
-	uint32_t whenQueued;									// milliseconds timer when this buffer was filled in
+	uint32_t whenQueued;
 
 	char data[OUTPUT_BUFFER_SIZE];
 	size_t dataLength, bytesRead;
@@ -143,7 +145,7 @@ public:
 	// Returns the first item's type from the stack or NoDestinationMessage if none is available
 	MessageType GetFirstItemType() const volatile noexcept;
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	// Set the first item of the stack. If it's NULL, then the first item will be removed
 	void SetFirstItem(OutputBuffer *buffer) volatile noexcept;
 #endif

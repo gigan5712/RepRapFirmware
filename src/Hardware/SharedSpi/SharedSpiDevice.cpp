@@ -13,6 +13,7 @@
 # include <DmacManager.h>
 # include <Serial.h>
 # include <peripheral_clk_config.h>
+# include <hri_sercom_e54.h>
 #elif USART_SPI
 # if SAME70 || SAM4E || SAM4S
 #  include <pmc/pmc.h>
@@ -45,23 +46,23 @@ SharedSpiDevice::SharedSpiDevice(uint8_t sercomNum) noexcept
 	const uint32_t regCtrlB = 0;											// 8 bits, slave select disabled, receiver disabled for now
 	const uint32_t regCtrlC = 0;											// not 32-bit mode
 
-	if ((hardware->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_SWRST) == 0)
+	if (!hri_sercomusart_is_syncing(hardware, SERCOM_USART_SYNCBUSY_SWRST))
 	{
-		while (hardware->USART.SYNCBUSY.reg & (SERCOM_USART_SYNCBUSY_SWRST | SERCOM_USART_SYNCBUSY_ENABLE)) { }
-		if (hardware->USART.CTRLA.reg & SERCOM_USART_CTRLA_ENABLE)
+		const uint32_t mode = regCtrlA & SERCOM_USART_CTRLA_MODE_Msk;
+		if (hri_sercomusart_get_CTRLA_reg(hardware, SERCOM_USART_CTRLA_ENABLE))
 		{
-			hardware->USART.CTRLA.reg &= ~SERCOM_USART_CTRLA_ENABLE;
-			while (hardware->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_ENABLE) { }
+			hri_sercomusart_clear_CTRLA_ENABLE_bit(hardware);
+			hri_sercomusart_wait_for_sync(hardware, SERCOM_USART_SYNCBUSY_ENABLE);
 		}
-		hardware->USART.CTRLA.reg = SERCOM_USART_CTRLA_SWRST | (regCtrlA & SERCOM_USART_CTRLA_MODE_Msk);
+		hri_sercomusart_write_CTRLA_reg(hardware, SERCOM_USART_CTRLA_SWRST | mode);
 	}
-	while (hardware->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_SWRST) { }
+	hri_sercomusart_wait_for_sync(hardware, SERCOM_USART_SYNCBUSY_SWRST);
 
-	hardware->USART.CTRLA.reg = regCtrlA;
-	hardware->USART.CTRLB.reg = regCtrlB;
-	hardware->USART.CTRLC.reg = regCtrlC;
-	hardware->USART.BAUD.reg = SERCOM_SPI_BAUD_BAUD(Serial::SercomFastGclkFreq/(2 * DefaultSharedSpiClockFrequency) - 1);
-	hardware->USART.DBGCTRL.reg = SERCOM_I2CM_DBGCTRL_DBGSTOP;				// baud rate generator is stopped when CPU halted by debugger
+	hri_sercomusart_write_CTRLA_reg(hardware, regCtrlA);
+	hri_sercomusart_write_CTRLB_reg(hardware, regCtrlB);
+	hri_sercomusart_write_CTRLC_reg(hardware, regCtrlC);
+	hri_sercomusart_write_BAUD_reg(hardware, SERCOM_SPI_BAUD_BAUD(Serial::SercomFastGclkFreq/(2 * DefaultSharedSpiClockFrequency) - 1));
+	hri_sercomusart_write_DBGCTRL_reg(hardware, SERCOM_I2CM_DBGCTRL_DBGSTOP);			// baud rate generator is stopped when CPU halted by debugger
 
 #if 0	// if using DMA
 	// Set up the DMA descriptors
@@ -116,7 +117,7 @@ void SharedSpiDevice::Disable() const noexcept
 {
 #if SAME5x
 	hardware->SPI.CTRLA.bit.ENABLE = 0;
-	while (hardware->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_ENABLE) { }
+	hri_sercomusart_wait_for_sync(hardware, SERCOM_USART_CTRLA_ENABLE);
 #elif USART_SPI
 	hardware->US_CR = US_CR_RXDIS | US_CR_TXDIS;			// disable transmitter and receiver
 #else
@@ -128,7 +129,7 @@ void SharedSpiDevice::Enable() const noexcept
 {
 #if SAME5x
 	hardware->SPI.CTRLA.bit.ENABLE = 1;
-	while (hardware->USART.SYNCBUSY.reg & SERCOM_USART_SYNCBUSY_ENABLE) { }
+	hri_sercomusart_wait_for_sync(hardware, SERCOM_USART_CTRLA_ENABLE);
 #elif USART_SPI
 	hardware->US_CR = US_CR_RXEN | US_CR_TXEN;				// enable transmitter and receiver
 #else
@@ -205,9 +206,9 @@ void SharedSpiDevice::SetClockFrequencyAndMode(uint32_t freq, SpiMode mode) cons
 	// Without rounding, divisor = 60/(2*4) = 7, actual clock rate = 4.3MHz
 	// With rounding, divisor = 67/8 = 8, actual clock rate = 3.75MHz
 	// To get more accurate speeds we could increase the clock frequency to 100MHz
-	hardware->USART.BAUD.reg = SERCOM_SPI_BAUD_BAUD((Serial::SercomFastGclkFreq + (2 * freq) - 1)/(2 * freq) - 1);
+	hri_sercomusart_write_BAUD_reg(hardware, SERCOM_SPI_BAUD_BAUD((Serial::SercomFastGclkFreq + (2 * freq) - 1)/(2 * freq) - 1));
 
-	uint32_t regCtrlA = SERCOM_SPI_CTRLA_MODE(3) | SERCOM_SPI_CTRLA_DIPO(3) | SERCOM_SPI_CTRLA_DOPO(0) | SERCOM_SPI_CTRLA_FORM(0);
+	uint32_t regCtrlA = SERCOM_SPI_CTRLA_MODE(3) | SERCOM_SPI_CTRLA_DIPO(3) | SERCOM_SPI_CTRLA_DOPO(0) | SERCOM_SPI_CTRLA_FORM(0) | SERCOM_SPI_CTRLA_ENABLE;
 	if (((uint8_t)mode & 2) != 0)
 	{
 		regCtrlA |= SERCOM_SPI_CTRLA_CPOL;
@@ -216,7 +217,7 @@ void SharedSpiDevice::SetClockFrequencyAndMode(uint32_t freq, SpiMode mode) cons
 	{
 		regCtrlA |= SERCOM_SPI_CTRLA_CPHA;
 	}
-	hardware->USART.CTRLA.reg = regCtrlA;
+	hri_sercomusart_write_CTRLA_reg(hardware, regCtrlA);
 	Enable();
 #elif USART_SPI
 	Disable();
@@ -349,8 +350,6 @@ void SharedSpiDevice::Init() noexcept
 	SetPinFunction(SharedSpiMosiPin, SharedSpiPinFunction);
 	SetPinFunction(SharedSpiMisoPin, SharedSpiPinFunction);
 	SetPinFunction(SharedSpiSclkPin, SharedSpiPinFunction);
-	SetHighDriveStrength(SharedSpiMosiPin);
-	SetHighDriveStrength(SharedSpiSclkPin);								// some devices (e.g. TFT LCD font chip) need fast rise and fall times
 	mainSharedSpiDevice = new SharedSpiDevice(SharedSpiSercomNumber);
 #elif USART_SPI
 	SetPinFunction(APIN_USART_SSPI_SCK, USARTSPISckPeriphMode);

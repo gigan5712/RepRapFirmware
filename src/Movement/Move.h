@@ -9,8 +9,7 @@
 #define MOVE_H_
 
 #include <RepRapFirmware.h>
-#include "AxisShaper.h"
-#include "ExtruderShaper.h"
+#include "InputShaper.h"
 #include "DDARing.h"
 #include "DDA.h"								// needed because of our inline functions
 #include "BedProbing/RandomProbePointSet.h"
@@ -94,18 +93,10 @@ public:
 
 	GCodeResult ConfigureAccelerations(GCodeBuffer&gb, const StringRef& reply) THROWS(GCodeException);		// process M204
 	GCodeResult ConfigureMovementQueue(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);		// process M595
-	GCodeResult ConfigurePressureAdvance(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);	// process M572
-
-	float GetPressureAdvanceClocks(size_t extruder) const noexcept;
-
-#if SUPPORT_REMOTE_COMMANDS
-	GCodeResult EutSetRemotePressureAdvance(const CanMessageMultipleDrivesRequest<float>& msg, size_t dataLength, const StringRef& reply) noexcept;
-#endif
 
 	float GetMaxPrintingAcceleration() const noexcept { return maxPrintingAcceleration; }
 	float GetMaxTravelAcceleration() const noexcept { return maxTravelAcceleration; }
-	AxisShaper& GetAxisShaper() noexcept { return axisShaper; }
-	ExtruderShaper& GetExtruderShaper(size_t extruder) noexcept { return extruderShapers[extruder]; }
+	InputShaper& GetShaper() noexcept { return shaper; }
 
 	void Diagnostics(MessageType mtype) noexcept;							// Report useful stuff
 
@@ -121,9 +112,7 @@ public:
 	bool IsAccessibleProbePoint(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept;
 
 	// Temporary kinematics functions
-#if SUPPORT_LINEAR_DELTA
 	bool IsDeltaMode() const noexcept { return kinematics->GetKinematicsType() == KinematicsType::linearDelta; }
-#endif
 	// End temporary functions
 
 	bool IsRawMotorMove(uint8_t moveType) const noexcept;									// Return true if this is a raw motor move
@@ -131,7 +120,7 @@ public:
 	float IdleTimeout() const noexcept;														// Returns the idle timeout in seconds
 	void SetIdleTimeout(float timeout) noexcept;											// Set the idle timeout in seconds
 
-	void Simulate(SimulationMode simMode) noexcept;											// Enter or leave simulation mode
+	void Simulate(uint8_t simMode) noexcept;												// Enter or leave simulation mode
 	float GetSimulationTime() const noexcept { return mainDDARing.GetSimulationTime(); }	// Get the accumulated simulation time
 
 	bool PausePrint(RestorePoint& rp) noexcept;												// Pause the print as soon as we can, returning true if we were able to
@@ -145,27 +134,32 @@ public:
 	uint32_t GetCompletedMoves() const noexcept { return mainDDARing.GetCompletedMoves(); }	// How many moves have been completed?
 	void ResetMoveCounters() noexcept { mainDDARing.ResetMoveCounters(); }
 
+	ReadWriteLock heightMapLock;
 	HeightMap& AccessHeightMap() noexcept { return heightMap; }								// Access the bed probing grid
 	const GridDefinition& GetGrid() const noexcept { return heightMap.GetGrid(); }			// Get the grid definition
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool LoadHeightMapFromFile(FileStore *f, const char *fname, const StringRef& r) noexcept;	// Load the height map from a file returning true if an error occurred
 	bool SaveHeightMapToFile(FileStore *f, const char *fname) noexcept;						// Save the height map to a file returning true if an error occurred
+#endif
+
+#if HAS_LINUX_INTERFACE
+	void SaveHeightMapToArray(float *arr) const noexcept;									// Save the height map Z coordinates to an array
 #endif
 
 	const RandomProbePointSet& GetProbePoints() const noexcept { return probePoints; }		// Return the probe point set constructed from G30 commands
 
 	DDARing& GetMainDDARing() noexcept { return mainDDARing; }
-	float GetTopSpeedMmPerSec() const noexcept { return mainDDARing.GetTopSpeedMmPerSec(); }
-	float GetRequestedSpeedMmPerSec() const noexcept { return mainDDARing.GetRequestedSpeedMmPerSec(); }
-	float GetAccelerationMmPerSecSquared() const noexcept { return mainDDARing.GetAccelerationMmPerSecSquared(); }
-	float GetDecelerationMmPerSecSquared() const noexcept { return mainDDARing.GetDecelerationMmPerSecSquared(); }
+	float GetTopSpeed() const noexcept { return mainDDARing.GetTopSpeed(); }
+	float GetRequestedSpeed() const noexcept { return mainDDARing.GetRequestedSpeed(); }
+	float GetAcceleration() const noexcept { return mainDDARing.GetAcceleration(); }
+	float GetDeceleration() const noexcept { return mainDDARing.GetDeceleration(); }
 
 	void AdjustLeadscrews(const floatc_t corrections[]) noexcept;							// Called by some Kinematics classes to adjust the leadscrews
 
-	int32_t GetAccumulatedExtrusion(size_t drive, bool& isPrinting) noexcept;				// Return and reset the accumulated commanded extrusion amount
+	int32_t GetAccumulatedExtrusion(size_t extruder, bool& isPrinting) noexcept;			// Return and reset the accumulated commanded extrusion amount
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteResumeSettings(FileStore *f) const noexcept;									// Write settings for resuming the print
 #endif
 
@@ -189,7 +183,7 @@ public:
 	static float MotorStepsToMovement(size_t drive, int32_t endpoint) noexcept;				// Convert number of motor steps to motor position
 
 #if SUPPORT_LASER || SUPPORT_IOBITS
-	[[noreturn]] void LaserTaskRun() noexcept;
+	void LaserTaskRun() noexcept;
 
 	static void CreateLaserTask() noexcept;													// create the laser task if we haven't already
 	static void WakeLaserTask() noexcept;													// wake up the laser task, called at the start of a new move
@@ -201,28 +195,15 @@ public:
 	static const TaskBase *GetMoveTaskHandle() noexcept { return &moveTask; }
 
 #if SUPPORT_REMOTE_COMMANDS
-# if USE_REMOTE_INPUT_SHAPING
-	void AddShapeddMoveFromRemote(const CanMessageMovementLinearShaped& msg) noexcept		// add a move from the ATE to the movement queue
-	{
-		mainDDARing.AddMoveFromRemote(msg);
-		MoveAvailable();
-	}
-# else
 	void AddMoveFromRemote(const CanMessageMovementLinear& msg) noexcept					// add a move from the ATE to the movement queue
 	{
 		mainDDARing.AddMoveFromRemote(msg);
-		MoveAvailable();
 	}
-# endif
 #endif
 
 protected:
 	DECLARE_OBJECT_MODEL
 	OBJECT_MODEL_ARRAY(queue)
-
-#if SUPPORT_COORDINATE_ROTATION
-	OBJECT_MODEL_ARRAY(rotationCentre)
-#endif
 
 private:
 	enum class MoveState : uint8_t
@@ -260,7 +241,7 @@ private:
 
 	DDARing& mainDDARing = rings[0];					// The DDA ring used for regular moves
 
-	SimulationMode simulationMode;						// Are we simulating, or really printing?
+	uint8_t simulationMode;								// Are we simulating, or really printing?
 	MoveState moveState;								// whether the idle timer is active
 
 	float maxPrintingAcceleration;
@@ -268,11 +249,7 @@ private:
 
 	unsigned int jerkPolicy;							// When we allow jerk
 	unsigned int idleCount;								// The number of times Spin was called and had no new moves to process
-
-	uint32_t whenLastMoveAdded;							// The time when we last added a move to the main DDA ring
-	uint32_t whenIdleTimerStarted;						// The approximate time at which the state last changed, except we don't record timing->idle
-
-	uint32_t idleTimeout;								// How long we wait with no activity before we reduce motor currents to idle, in milliseconds
+	uint32_t idleStartTime;								// the time when we started to idle
 	uint32_t longestGcodeWaitInterval;					// the longest we had to wait for a new GCode
 
 	float tangents[3]; 									// Axis compensation - 90 degrees + angle gives angle between axes
@@ -291,11 +268,12 @@ private:
 	Deviation initialCalibrationDeviation;
 	Deviation latestMeshDeviation;
 
+	uint32_t idleTimeout;								// How long we wait with no activity before we reduce motor currents to idle, in milliseconds
+	uint32_t lastStateChangeTime;						// The approximate time at which the state last changed, except we don't record timing->idle
 
 	Kinematics *kinematics;								// What kinematics we are using
 
-	AxisShaper axisShaper;
-	ExtruderShaper extruderShapers[MaxExtruders];
+	InputShaper shaper;
 
 	float latestLiveCoordinates[MaxAxesPlusExtruders];
 	float specialMoveCoords[MaxDriversPerAxis];			// Amounts by which to move individual Z motors (leadscrew adjustment move)
@@ -337,25 +315,13 @@ inline void Move::ResetExtruderPositions() noexcept
 	mainDDARing.ResetExtruderPositions();
 }
 
-inline float Move::GetPressureAdvanceClocks(size_t extruder) const noexcept
-{
-	return (extruder < MaxExtruders) ? extruderShapers[extruder].GetKclocks() : 0.0;
-}
-
-// Get the accumulated extruder motor steps taken by an extruder since the last call. Used by the filament monitoring code.
-// Returns the number of motor steps moves since the last call, and sets isPrinting true unless we are currently executing an extruding but non-printing move
-inline int32_t Move::GetAccumulatedExtrusion(size_t drive, bool& isPrinting) noexcept
-{
-	return mainDDARing.GetAccumulatedMovement(drive, isPrinting);
-}
-
 #if HAS_SMART_DRIVERS
 
 // Get the current step interval for this axis or extruder, or 0 if it is not moving
 // This is called from the stepper drivers SPI interface ISR
 inline __attribute__((always_inline)) uint32_t Move::GetStepInterval(size_t axis, uint32_t microstepShift) const noexcept
 {
-	return (simulationMode == SimulationMode::off) ? mainDDARing.GetStepInterval(axis, microstepShift) : 0;
+	return (simulationMode == 0) ? mainDDARing.GetStepInterval(axis, microstepShift) : 0;
 }
 
 #endif

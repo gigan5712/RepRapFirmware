@@ -179,24 +179,18 @@ void EndstopsManager::AddToActive(EndstopOrZProbe& e) noexcept
 }
 
 // Set up the active endstop list according to the axes commanded to move in a G0/G1 S1/S3 command. Return true if successful.
-bool EndstopsManager::EnableAxisEndstops(AxesBitmap axes, bool forHoming, bool& reduceAcceleration) noexcept
+bool EndstopsManager::EnableAxisEndstops(AxesBitmap axes, bool forHoming) noexcept
 {
 	activeEndstops = nullptr;
-	reduceAcceleration = false;
 	isHomingMove = forHoming && axes.IsNonEmpty();
 	const Kinematics& kin = reprap.GetMove().GetKinematics();
 	while (axes.IsNonEmpty())
 	{
 		const unsigned int axis = axes.LowestSetBit();
 		axes.ClearBit(axis);
-		Endstop * const es = axisEndstops[axis];
-		if (es != nullptr && es->Prime(kin, reprap.GetPlatform().GetAxisDriversConfig(axis)))
+		if (axisEndstops[axis] != nullptr && axisEndstops[axis]->Prime(kin, reprap.GetPlatform().GetAxisDriversConfig(axis)))
 		{
-			AddToActive(*es);
-			if (es->ShouldReduceAcceleration())
-			{
-				reduceAcceleration = true;
-			}
+			AddToActive(*axisEndstops[axis]);
 		}
 		else
 		{
@@ -428,7 +422,9 @@ GCodeResult EndstopsManager::HandleM574(GCodeBuffer& gb, const StringRef& reply,
 
 			if (pos == EndStopPosition::noEndStop)
 			{
-				DeleteObject(axisEndstops[axis]);
+				Endstop *es = nullptr;
+				std::swap(es, axisEndstops[axis]);
+				delete es;
 			}
 			else
 			{
@@ -437,23 +433,39 @@ GCodeResult EndstopsManager::HandleM574(GCodeBuffer& gb, const StringRef& reply,
 #if HAS_STALL_DETECT
 				case EndStopType::motorStallAny:
 					// Asking for stall detection endstop, so we can delete any existing endstop(s) and create new ones
-					ReplaceObject(axisEndstops[axis], new StallDetectionEndstop(axis, pos, false));
+					{
+						Endstop *es = new StallDetectionEndstop(axis, pos, false);
+						std::swap(es, axisEndstops[axis]);
+						delete es;
+					}
 					break;
 
 				case EndStopType::motorStallIndividual:
 					// Asking for stall detection endstop, so we can delete any existing endstop(s) and create new ones
-					ReplaceObject(axisEndstops[axis], new StallDetectionEndstop(axis, pos, true));
+					{
+						Endstop *es = new StallDetectionEndstop(axis, pos, true);
+						std::swap(es, axisEndstops[axis]);
+						delete es;
+					}
 					break;
 #else
 				case EndStopType::motorStallAny:
 				case EndStopType::motorStallIndividual:
-					DeleteObject(axisEndstops[axis]);
+					{
+						Endstop *es = nullptr;
+						std::swap(es, axisEndstops[axis]);
+						delete es;
+					}
 					reply.copy("Stall detection not supported by this hardware");
 					return GCodeResult::error;
 #endif
 				case EndStopType::zProbeAsEndstop:
 					// Asking for a ZProbe or stall detection endstop, so we can delete any existing endstop(s) and create new ones
-					ReplaceObject(axisEndstops[axis], new ZProbeEndstop(axis, pos));
+					{
+						Endstop *es = new ZProbeEndstop(axis, pos);
+						std::swap(es, axisEndstops[axis]);
+						delete es;
+					}
 					break;
 
 				case EndStopType::inputPin:
@@ -527,7 +539,7 @@ void EndstopsManager::SetZProbeDefaults() noexcept
 	zProbes[0]->SetDefaults();
 	for (size_t i = 0; i < MaxZProbes; ++i)
 	{
-		DeleteObject(zProbes[i]);
+		delete zProbes[i];
 	}
 }
 
@@ -565,7 +577,7 @@ GCodeResult EndstopsManager::ProgramZProbe(GCodeBuffer& gb, const StringRef& rep
 	return GCodeResult::error;
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 bool EndstopsManager::WriteZProbeParameters(FileStore *f, bool includingG31) const noexcept
 {
@@ -573,24 +585,16 @@ bool EndstopsManager::WriteZProbeParameters(FileStore *f, bool includingG31) con
 	bool written = false;
 	for (size_t i = 0; i < MaxZProbes; ++i)
 	{
-		ZProbe * const zp = zProbes[i];
-		if (zp != nullptr)
+		if (zProbes[i] != nullptr && (includingG31 || zProbes[i]->GetSaveToConfigOverride()))
 		{
-			if (includingG31)
+			if (!written)
 			{
-				zp->SetSaveToConfigOverride();
+				ok = f->Write("; Z probe parameters\n");
+				written = true;
 			}
-			if (zp->GetSaveToConfigOverride())
+			if (ok)
 			{
-				if (!written)
-				{
-					ok = f->Write("; Z probe parameters\n");
-					written = true;
-				}
-				if (ok)
-				{
-					ok = zp->WriteParameters(f, i);
-				}
+				ok = zProbes[i]->WriteParameters(f, i);
 			}
 		}
 	}
@@ -611,9 +615,10 @@ GCodeResult EndstopsManager::HandleM558(GCodeBuffer& gb, const StringRef &reply)
 	// If it is a motor stall endstop, there should not be a port specified, but we can ignore the port if it is present
 	uint32_t probeType = (uint32_t)ZProbeType::none;
 	bool seenType = false;
-	gb.TryGetLimitedUIValue('P', probeType, seenType, (uint32_t)ZProbeType::numTypes);
+	gb.TryGetUIValue('P', probeType, seenType);
 	if (   seenType
-		&& (   probeType == (uint32_t)ZProbeType::e1Switch_obsolete
+		&& (   probeType >= (uint32_t)ZProbeType::numTypes
+			|| probeType == (uint32_t)ZProbeType::e1Switch_obsolete
 			|| probeType == (uint32_t)ZProbeType::endstopSwitch_obsolete
 			|| probeType == (uint32_t)ZProbeType::zSwitch_obsolete
 		   )
@@ -643,7 +648,8 @@ GCodeResult EndstopsManager::HandleM558(GCodeBuffer& gb, const StringRef &reply)
 			return GCodeResult::error;
 		}
 
-		DeleteObject(zProbes[probeNumber]);		// delete the old probe first, the new one might use the same ports
+		zProbes[probeNumber] = nullptr;
+		delete existingProbe;					// delete the old probe first, the new one might use the same ports
 
 		ZProbe *newProbe;
 		switch ((ZProbeType)probeType)
@@ -681,16 +687,6 @@ GCodeResult EndstopsManager::HandleM558(GCodeBuffer& gb, const StringRef &reply)
 				}
 				else
 #endif
-					if (   probeNumber != 0
-						&& (   probeType == (unsigned int)ZProbeType::analog || probeType == (unsigned int)ZProbeType::alternateAnalog
-							|| probeType == (unsigned int)ZProbeType::dumbModulated || probeType == (unsigned int)ZProbeType::digital
-						   )
-					   )
-				{
-					reply.copy("Types 1,2,3 and 5 are available for Z probe 0 only");
-					return GCodeResult::error;
-				}
-				else
 				{
 					newProbe = new LocalZProbe(probeNumber);
 				}
@@ -699,7 +695,7 @@ GCodeResult EndstopsManager::HandleM558(GCodeBuffer& gb, const StringRef &reply)
 		}
 
 		const GCodeResult rslt = newProbe->Configure(gb, reply, seen);
-		if (Succeeded(rslt))
+		if (rslt == GCodeResult::ok || rslt == GCodeResult::warning)
 		{
 			zProbes[probeNumber] = newProbe;
 		}

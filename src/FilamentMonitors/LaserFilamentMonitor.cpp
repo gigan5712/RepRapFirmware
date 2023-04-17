@@ -11,10 +11,6 @@
 #include <Platform/RepRap.h>
 #include <Movement/Move.h>
 
-#if SUPPORT_REMOTE_COMMANDS
-# include <CanMessageGenericParser.h>
-#endif
-
 // Unless we set the option to compare filament on all type of move, we reject readings if the last retract or reprime move wasn't completed
 // well before the start bit was received. This is because those moves have high accelerations and decelerations, so the measurement delay
 // is more likely to cause errors. This constant sets the delay required after a retract or reprime move before we accept the measurement.
@@ -34,51 +30,33 @@ constexpr ObjectModelTableEntry LaserFilamentMonitor::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
 	// 0. LaserFilamentMonitor members
-#ifdef DUET3_ATE
-	{ "brightness",			OBJECT_MODEL_FUNC((int32_t)self->brightness),															ObjectModelEntryFlags::live },
-#endif
-	{ "calibrated", 		OBJECT_MODEL_FUNC_IF(self->IsLocal() && self->dataReceived && self->HaveCalibrationData(), self, 1), 	ObjectModelEntryFlags::live },
+	{ "calibrated", 		OBJECT_MODEL_FUNC_IF(self->IsLocal() && self->dataReceived && self->HaveCalibrationData(), self, 1), 	ObjectModelEntryFlags::none },
 	{ "configured", 		OBJECT_MODEL_FUNC(self, 2), 																			ObjectModelEntryFlags::none },
 	{ "enabled",			OBJECT_MODEL_FUNC(self->comparisonEnabled),		 														ObjectModelEntryFlags::none },
-#ifdef DUET3_ATE
-	{ "position",			OBJECT_MODEL_FUNC((int32_t)self->sensorValue),															ObjectModelEntryFlags::live },
-	{ "shutter",			OBJECT_MODEL_FUNC((int32_t)self->shutter),																ObjectModelEntryFlags::live },
-#endif
 	{ "status",				OBJECT_MODEL_FUNC(self->GetStatusText()),																ObjectModelEntryFlags::live },
 	{ "type",				OBJECT_MODEL_FUNC_NOSELF("laser"), 																		ObjectModelEntryFlags::none },
 
 	// 1. LaserFilamentMonitor.calibrated members
-	{ "percentMax",			OBJECT_MODEL_FUNC(ConvertToPercent(self->maxMovementRatio)), 											ObjectModelEntryFlags::live },
-	{ "percentMin",			OBJECT_MODEL_FUNC(ConvertToPercent(self->minMovementRatio)), 											ObjectModelEntryFlags::live },
-	{ "sensitivity",		OBJECT_MODEL_FUNC(ConvertToPercent(self->MeasuredSensitivity())), 										ObjectModelEntryFlags::live },
-	{ "totalDistance",		OBJECT_MODEL_FUNC(self->totalExtrusionCommanded, 1), 													ObjectModelEntryFlags::live },
+	{ "percentMax",			OBJECT_MODEL_FUNC(ConvertToPercent(self->maxMovementRatio)), 											ObjectModelEntryFlags::none },
+	{ "percentMin",			OBJECT_MODEL_FUNC(ConvertToPercent(self->minMovementRatio)), 											ObjectModelEntryFlags::none },
+	{ "sensitivity",		OBJECT_MODEL_FUNC(ConvertToPercent(self->MeasuredSensitivity())), 										ObjectModelEntryFlags::none },
+	{ "totalDistance",		OBJECT_MODEL_FUNC(self->totalExtrusionCommanded, 1), 													ObjectModelEntryFlags::none },
 
 	// 2. LaserFilamentMonitor.configured members
-	{ "allMoves",			OBJECT_MODEL_FUNC(self->checkNonPrintingMoves), 														ObjectModelEntryFlags::none },
 	{ "calibrationFactor",	OBJECT_MODEL_FUNC(self->calibrationFactor, 3), 															ObjectModelEntryFlags::none },
 	{ "percentMax",			OBJECT_MODEL_FUNC(ConvertToPercent(self->maxMovementAllowed)), 											ObjectModelEntryFlags::none },
 	{ "percentMin",			OBJECT_MODEL_FUNC(ConvertToPercent(self->minMovementAllowed)), 											ObjectModelEntryFlags::none },
 	{ "sampleDistance",	 	OBJECT_MODEL_FUNC(self->minimumExtrusionCheckLength, 1), 												ObjectModelEntryFlags::none },
 };
 
-constexpr uint8_t LaserFilamentMonitor::objectModelTableDescriptor[] =
-{
-	3,
-#ifdef DUET3_ATE
-	8,
-#else
-	5,
-#endif
-	4,
-	5
-};
+constexpr uint8_t LaserFilamentMonitor::objectModelTableDescriptor[] = { 3, 5, 4, 4 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(LaserFilamentMonitor)
 
 #endif
 
-LaserFilamentMonitor::LaserFilamentMonitor(unsigned int drv, unsigned int monitorType, DriverId did) noexcept
-	: Duet3DFilamentMonitor(drv, monitorType, did),
+LaserFilamentMonitor::LaserFilamentMonitor(unsigned int extruder, unsigned int monitorType) noexcept
+	: Duet3DFilamentMonitor(extruder, monitorType),
 	  calibrationFactor(1.0),
 	  minMovementAllowed(DefaultMinMovementAllowed), maxMovementAllowed(DefaultMaxMovementAllowed),
 	  minimumExtrusionCheckLength(DefaultMinimumExtrusionCheckLength), comparisonEnabled(false), checkNonPrintingMoves(false)
@@ -123,13 +101,8 @@ float LaserFilamentMonitor::MeasuredSensitivity() const noexcept
 GCodeResult LaserFilamentMonitor::Configure(GCodeBuffer& gb, const StringRef& reply, bool& seen) THROWS(GCodeException)
 {
 	const GCodeResult rslt = CommonConfigure(gb, reply, InterruptMode::change, seen);
-	if (Succeeded(rslt))
+	if (rslt <= GCodeResult::warning)
 	{
-		if (seen)
-		{
-			Init();				// Init() resets dataReceived and version, so only do it if the port has been configured
-		}
-
 		gb.TryGetFValue('L', calibrationFactor, seen);
 		gb.TryGetFValue('E', minimumExtrusionCheckLength, seen);
 
@@ -163,17 +136,17 @@ GCodeResult LaserFilamentMonitor::Configure(GCodeBuffer& gb, const StringRef& re
 
 		if (seen)
 		{
+			Init();
 			reprap.SensorsUpdated();
 		}
 		else
 		{
 			reply.printf("Duet3D laser filament monitor v%u%s on pin ", version, (switchOpenMask != 0) ? " with switch" : "");
 			GetPort().AppendPinName(reply);
-			reply.catf(", %s, allow %ld%% to %ld%%, check %s moves every %.1fmm, calibration factor %.3f, ",
+			reply.catf(", %s, allow %ld%% to %ld%%, check every %.1fmm, calibration factor %.3f, ",
 						(comparisonEnabled) ? "enabled" : "disabled",
 						ConvertToPercent(minMovementAllowed),
 						ConvertToPercent(maxMovementAllowed),
-						(checkNonPrintingMoves) ? "all" : "printing",
 						(double)minimumExtrusionCheckLength,
 						(double)calibrationFactor);
 
@@ -485,7 +458,7 @@ FilamentSensorStatus LaserFilamentMonitor::Clear() noexcept
 // Print diagnostic info for this sensor
 void LaserFilamentMonitor::Diagnostics(MessageType mtype, unsigned int extruder) noexcept
 {
-	String<StringLength256> buf;
+	String<FormatStringLength> buf;
 	buf.printf("Extruder %u: ", extruder);
 	if (dataReceived)
 	{
@@ -498,113 +471,5 @@ void LaserFilamentMonitor::Diagnostics(MessageType mtype, unsigned int extruder)
 	}
 	reprap.GetPlatform().Message(mtype, buf.c_str());
 }
-
-#if SUPPORT_REMOTE_COMMANDS
-
-// Configure this sensor, returning true if error and setting 'seen' if we processed any configuration parameters
-GCodeResult LaserFilamentMonitor::Configure(const CanMessageGenericParser& parser, const StringRef& reply) noexcept
-{
-	bool seen = false;
-	const GCodeResult rslt = CommonConfigure(parser, reply, InterruptMode::change, seen);
-	if (rslt <= GCodeResult::warning)
-	{
-		if (parser.GetFloatParam('L', calibrationFactor))
-		{
-			seen = true;
-		}
-		if (parser.GetFloatParam('E', minimumExtrusionCheckLength))
-		{
-			seen = true;
-		}
-
-		uint16_t minMax[2];
-		size_t numValues = 2;
-		if (parser.GetUint16ArrayParam('R', numValues, minMax))
-		{
-			if (numValues > 0)
-			{
-				seen = true;
-				minMovementAllowed = (float)minMax[0] * 0.01;
-			}
-			if (numValues > 1)
-			{
-				maxMovementAllowed = (float)minMax[1] * 0.01;
-			}
-		}
-
-		uint16_t temp;
-		if (parser.GetUintParam('S', temp))
-		{
-			seen = true;
-			comparisonEnabled = (temp > 0);
-		}
-
-		if (parser.GetUintParam('A', temp))
-		{
-			seen = true;
-			checkNonPrintingMoves = (temp > 0);
-		}
-
-		if (seen)
-		{
-			Init();
-		}
-		else
-		{
-			reply.printf("Duet3D laser filament monitor v%u%s on pin ", version, (switchOpenMask != 0) ? " with switch" : "");
-			GetPort().AppendPinName(reply);
-			reply.catf(", %s, allow %ld%% to %ld%%, check every %.1fmm, calibration factor %.3f, ",
-						(comparisonEnabled) ? "enabled" : "disabled",
-						ConvertToPercent(minMovementAllowed),
-						ConvertToPercent(maxMovementAllowed),
-						(double)minimumExtrusionCheckLength,
-						(double)calibrationFactor);
-
-			if (!dataReceived)
-			{
-				reply.cat("no data received");
-			}
-			else
-			{
-				reply.catf("version %u, ", version);
-				if (switchOpenMask != 0)
-				{
-					reply.cat(((sensorValue & switchOpenMask) != 0) ? "no filament, " : "filament present, ");
-				}
-				if (imageQuality != 0)
-				{
-					reply.catf("quality %u, ", imageQuality);
-				}
-				if (version >= 2)
-				{
-					reply.catf("brightness %u, shutter %u, ", brightness, shutter);
-				}
-				if (sensorError)
-				{
-					reply.cat("error");
-					if (lastErrorCode != 0)
-					{
-						reply.catf(" %u", lastErrorCode);
-					}
-				}
-				else if (HaveCalibrationData())
-				{
-					reply.catf("measured min %ld%% avg %ld%% max %ld%% over %.1fmm",
-						ConvertToPercent(minMovementRatio),
-						ConvertToPercent(MeasuredSensitivity()),
-						ConvertToPercent(maxMovementRatio),
-						(double)totalExtrusionCommanded);
-				}
-				else
-				{
-					reply.cat("no calibration data");
-				}
-			}
-		}
-	}
-	return rslt;
-}
-
-#endif
 
 // End

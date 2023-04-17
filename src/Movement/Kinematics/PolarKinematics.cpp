@@ -7,8 +7,6 @@
 
 #include "PolarKinematics.h"
 
-#if SUPPORT_POLAR
-
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
 #include <Storage/MassStorage.h>
@@ -41,7 +39,7 @@ DEFINE_GET_OBJECT_MODEL_TABLE(PolarKinematics)
 PolarKinematics::PolarKinematics() noexcept
 	: Kinematics(KinematicsType::polar, SegmentationType(true, false, false)),
 	  minRadius(0.0), maxRadius(DefaultMaxRadius), homedRadius(0.0),
-	  maxTurntableSpeed(ConvertSpeedFromMmPerSec(DefaultMaxTurntableSpeed)), maxTurntableAcceleration(ConvertAcceleration(DefaultMaxTurntableAcceleration))
+	  maxTurntableSpeed(DefaultMaxTurntableSpeed), maxTurntableAcceleration(DefaultMaxTurntableAcceleration)
 {
 	Recalc();
 }
@@ -89,16 +87,8 @@ bool PolarKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const Strin
 		gb.TryGetFValue('H', homedRadius, seen);
 
 		bool seenNonGeometry = TryConfigureSegmentation(gb);
-		if (gb.Seen('A'))
-		{
-			maxTurntableAcceleration = gb.GetAcceleration();
-			seenNonGeometry = true;
-		}
-		if (gb.Seen('F'))
-		{
-			maxTurntableSpeed = gb.GetSpeedFromMm(true);
-			seenNonGeometry = true;
-		}
+		gb.TryGetFValue('A', maxTurntableAcceleration, seenNonGeometry);
+		gb.TryGetFValue('F', maxTurntableSpeed, seenNonGeometry);
 
 		if (seen)
 		{
@@ -106,10 +96,9 @@ bool PolarKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const Strin
 		}
 		else if (!seenNonGeometry && !gb.Seen('K'))
 		{
-			Kinematics::Configure(mCode, gb, reply, error);
-			reply.catf(", radius %.1f to %.1fmm, homed radius %.1fmm, max table acc. %.1fdeg/sec^2, max table speed %.1fdeg/sec",
+			reply.printf("Kinematics is Polar with radius %.1f to %.1fmm, homed radius %.1fmm, segments/sec %d, min. segment length %.2f",
 							(double)minRadius, (double)maxRadius, (double)homedRadius,
-							(double)InverseConvertAcceleration(maxTurntableAcceleration), (double)InverseConvertSpeedToMmPerSec(maxTurntableSpeed));
+							(int)GetSegmentsPerSecond(), (double)GetMinSegmentLength());
 		}
 		return seen;
 	}
@@ -158,7 +147,7 @@ void PolarKinematics::MotorStepsToCartesian(const int32_t motorPos[], const floa
 }
 
 // Return true if the specified XY position is reachable by the print head reference point.
-bool PolarKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept
+bool PolarKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept
 {
 	if (axes.IsBitSet(X_AXIS) && axes.IsBitSet(Y_AXIS))
 	{
@@ -170,7 +159,7 @@ bool PolarKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) co
 	}
 	axes.ClearBit(X_AXIS);
 	axes.ClearBit(Y_AXIS);
-	return Kinematics::IsReachable(axesCoords, axes);
+	return Kinematics::IsReachable(axesCoords, axes, isCoordinated);
 }
 
 // Limit the Cartesian position that the user wants to move to, returning true if any coordinates were changed
@@ -235,9 +224,9 @@ AxesBitmap PolarKinematics::AxesAssumedHomed(AxesBitmap g92Axes) const noexcept
 // Return the set of axes that must be homed prior to regular movement of the specified axes
 AxesBitmap PolarKinematics::MustBeHomedAxes(AxesBitmap axesMoving, bool disallowMovesBeforeHoming) const noexcept
 {
-	if (axesMoving.Intersects(XyAxes))
+	if (axesMoving.Intersects(XyzAxes))
 	{
-		axesMoving |= XyAxes;
+		axesMoving |= XyzAxes;
 	}
 	return axesMoving;
 }
@@ -298,7 +287,7 @@ void PolarKinematics::OnHomingSwitchTriggered(size_t axis, bool highEnd, const f
 // The speeds in Cartesian space have already been limited.
 void PolarKinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept
 {
-	int32_t turntableMovement = dda.DriveCoordinates()[1] - dda.GetPrevious()->DriveCoordinates()[1];
+	int32_t turntableMovement = labs(dda.DriveCoordinates()[1] - dda.GetPrevious()->DriveCoordinates()[1]);
 	if (turntableMovement != 0)
 	{
 		const float stepsPerDegree = reprap.GetPlatform().DriveStepsPerUnit(1);
@@ -316,7 +305,7 @@ void PolarKinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalise
 		}
 		if (turntableMovement != 0)
 		{
-			const float stepRatio = dda.GetTotalDistance() * stepsPerDegree/labs(turntableMovement);
+			const float stepRatio = dda.GetTotalDistance() * stepsPerDegree/abs(turntableMovement);
 			dda.LimitSpeedAndAcceleration(stepRatio * maxTurntableSpeed, stepRatio * maxTurntableAcceleration);
 		}
 	}
@@ -341,7 +330,5 @@ void PolarKinematics::Recalc()
 	minRadiusSquared = (minRadius <= 0.0) ? 0.0 : fsquare(minRadius);
 	maxRadiusSquared = fsquare(maxRadius);
 }
-
-#endif // SUPPORT_POLAR
 
 // End

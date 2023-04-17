@@ -8,6 +8,7 @@
 #include "IoPorts.h"
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
+#include <Configuration.h>
 #include <GCodes/GCodeBuffer/GCodeBuffer.h>
 
 #ifdef DUET_NG
@@ -77,7 +78,7 @@ bool IoPort::AssignPort(GCodeBuffer& gb, const StringRef& reply, PinUsedBy neede
 		const CanAddress boardAddress = RemoveBoardAddress(pn.GetRef());
 		if (boardAddress != CanInterface::GetCanAddress())
 		{
-			reply.lcat("Port must be on main board");
+			reply.lcat("Remote ports are not supported by this command");
 #else
 		if (!RemoveBoardAddress(pn.GetRef()))
 		{
@@ -174,7 +175,7 @@ void IoPort::Release() noexcept
 	hardwareInvert = totalInvert = false;
 }
 
-// Attach an interrupt to the pin. Not permitted if we allocated the pin in shared input mode.
+// Attach an interrupt to the pin. Nor permitted if we allocated the pin in shared input mode.
 bool IoPort::AttachInterrupt(StandardCallbackFunction callback, InterruptMode mode, CallbackParameter param) const noexcept
 {
 	return IsValid() && !isSharedInput && attachInterrupt(GetPinNoCheck(), callback, mode, param);
@@ -393,7 +394,7 @@ void IoPort::ToggleInvert(bool pInvert) noexcept
 	}
 }
 
-void IoPort::AppendBasicDetails(const StringRef& str) const noexcept
+void IoPort::AppendDetails(const StringRef& str) const noexcept
 {
 	if (IsValid())
 	{
@@ -532,6 +533,12 @@ uint16_t IoPort::ReadAnalog() const noexcept
 	return (totalInvert) ? ((1u << AdcBits) - 1) - val : val;
 }
 
+uint16_t IoPort::ReadAnalogNotInverted() const noexcept
+{
+	const uint16_t val = AnalogInReadChannel(GetAnalogChannel());
+	return val;
+}
+
 #if SUPPORT_CAN_EXPANSION
 // Remove the board address from a port name string and return it
 /*static*/ CanAddress IoPort::RemoveBoardAddress(const StringRef& portName) noexcept
@@ -644,19 +651,13 @@ PwmPort::PwmPort() noexcept
 	frequency = DefaultPinWritePwmFreq;
 }
 
-// Append the frequency if the port is valid
-void PwmPort::AppendFrequency(const StringRef& str) const noexcept
+void PwmPort::AppendDetails(const StringRef& str) const noexcept
 {
+	IoPort::AppendDetails(str);
 	if (IsValid())
 	{
 		str.catf(" frequency %uHz", frequency);
 	}
-}
-
-void PwmPort::AppendFullDetails(const StringRef& str) const noexcept
-{
-	AppendBasicDetails(str);
-	AppendFrequency(str);
 }
 
 void PwmPort::WriteAnalog(float pwm) const noexcept
@@ -667,8 +668,4 @@ void PwmPort::WriteAnalog(float pwm) const noexcept
 	}
 }
 
-void PwmPort::SetFrequency(PwmFrequency freq) noexcept
-{
-	frequency = freq;
-}
 // End

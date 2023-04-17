@@ -101,7 +101,7 @@ private:
 
 enum class GCodeInputReadResult : uint8_t { haveData, noData, error };
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 // This class is an expansion of the RegularGCodeInput class to buffer G-codes and to rewind file positions when
 // nested G-code files are started. However buffered codes are not explicitly checked for M112.
@@ -109,7 +109,7 @@ class FileGCodeInput : public RegularGCodeInput
 {
 public:
 
-	FileGCodeInput() noexcept : RegularGCodeInput() { }
+	FileGCodeInput() noexcept : RegularGCodeInput(), lastFile(nullptr) { }
 
 	void Reset() noexcept override;								// Clears the buffer. Should be called when the associated file is being closed
 	void Reset(const FileData &file) noexcept;					// Clears the buffer of a specific file. Should be called when it is closed or re-opened outside the reading context
@@ -117,7 +117,7 @@ public:
 	GCodeInputReadResult ReadFromFile(FileData &file) noexcept;	// Read another chunk of G-codes from the file and return true if more data is available
 
 private:
-	FileData lastFileRead;
+	FileStore *lastFile;
 };
 
 #endif

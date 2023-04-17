@@ -104,7 +104,7 @@ void CanMessageGenericConstructor::PopulateFromCommand(GCodeBuffer& gb) THROWS(G
 
 			case ParamDescriptor::string:
 				{
-					String<StringLength50> str;
+					String<StringLength20> str;
 					gb.GetQuotedString(str.GetRef());
 					StoreValue(str.c_str(), str.strlen() + 1);
 				}
@@ -112,7 +112,7 @@ void CanMessageGenericConstructor::PopulateFromCommand(GCodeBuffer& gb) THROWS(G
 
 			case ParamDescriptor::reducedString:
 				{
-					String<StringLength50> str;
+					String<StringLength20> str;
 					gb.GetReducedString(str.GetRef());
 					// We don't want port names sent to expansion boards to include the board number, so remove the board number.
 					// We also use the reducedString type for sensor names, but they should't start with digits followed by '.'.
@@ -329,29 +329,16 @@ void CanMessageGenericConstructor::AddDriverIdParam(char c, DriverId did) THROWS
 	InsertValue(&did.localDriver, sz, pos);
 }
 
-void CanMessageGenericConstructor::AddFloatArrayParam(char c, const float *v, size_t numV) THROWS(GCodeException)
+GCodeResult CanMessageGenericConstructor::SendAndGetResponse(CanMessageType msgType, CanAddress dest, const StringRef& reply) noexcept
 {
-	ParamDescriptor::ParamType t;
-	size_t sz;
-	const unsigned int pos = FindInsertPoint(c, t, sz);
-	if (t != ParamDescriptor::float_array || numV != sz)
-	{
-		throw ConstructParseException("fval array wrong parameter type or length");
-	}
-	InsertValue(&numV, sizeof(uint8_t), pos);
-	InsertValue(v, numV * sizeof(float), pos + sizeof(uint8_t));
-}
-
-GCodeResult CanMessageGenericConstructor::SendAndGetResponse(CanMessageType msgType, CanAddress dest, const StringRef& reply) const noexcept
-{
-	CanMessageBuffer * const buf = CanMessageBuffer::Allocate();
+	CanMessageBuffer * buf = CanMessageBuffer::Allocate();
 	if (buf == nullptr)
 	{
 		reply.copy("no CAN buffer available");
 		return GCodeResult::error;
 	}
 
-	const CanRequestId rid = CanInterface::AllocateRequestId(dest, buf);
+	const CanRequestId rid = CanInterface::AllocateRequestId(dest);
 	const size_t actualMessageLength = CanMessageGeneric::GetActualDataLength(dataLen);
 	CanMessageGeneric *m2 = buf->SetupGenericRequestMessage(rid, CanInterface::GetCanAddress(), dest, msgType, actualMessageLength);
 	memcpy(m2, &msg, actualMessageLength);

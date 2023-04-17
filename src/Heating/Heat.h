@@ -84,6 +84,9 @@ public:
 	GCodeResult SetPidParameters(unsigned int heater, GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException); // Set the P/I/D parameters for a heater
 	GCodeResult HandleM143(GCodeBuffer &gb, const StringRef &reply) THROWS(GCodeException);	// Configure heater protection (M143)
 
+	[[noreturn]] void SensorsTask() noexcept;
+	static void EnsureSensorsTask() noexcept;
+
 	ReadLockedPointer<TemperatureSensor> FindSensor(int sn) const noexcept;	// Get a pointer to the temperature sensor entry
 	ReadLockedPointer<TemperatureSensor> FindSensorAtOrAbove(unsigned int sn) const noexcept;	// Get a pointer to the first temperature sensor with the specified or higher number
 
@@ -106,7 +109,7 @@ public:
 		return lastStandbyTools[heater];
 	}
 
-	bool IsHeaterEnabled(size_t heater)	const noexcept					// Is this heater enabled?
+	bool IsHeaterEnabled(size_t heater)	const noexcept;					// Is this heater enabled?
 	pre(heater < MaxHeaters);
 
 	float GetActiveTemperature(int heater) const noexcept;
@@ -123,14 +126,12 @@ public:
 
 	void SetActiveTemperature(int heater, float t) THROWS(GCodeException) { SetTemperature(heater, t, true); }
 	void SetStandbyTemperature(int heater, float t) THROWS(GCodeException) { SetTemperature(heater, t, false); }
-	void SetTemperature(int heater, float t, bool activeNotStandby) THROWS(GCodeException);
-
-	GCodeResult SetActiveOrStandby(int heater, const Tool *tool, bool active, const StringRef& reply) noexcept;	// Turn a heater on
+	GCodeResult Activate(int heater, const StringRef& reply) noexcept;	// Turn on a heater
+	void Standby(int heater, const Tool* tool) noexcept;				// Set a heater to standby
 	void SwitchOff(int heater) noexcept;								// Turn off a specific heater
 	void FeedForwardAdjustment(unsigned int heater, float fanPwmChange, float extrusionChange) const noexcept;
-	void SetExtrusionFeedForward(unsigned int heater, float pwm) const noexcept;
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteModelParameters(FileStore *f) const noexcept;				// Write heater model parameters to file returning true if no error
 	bool WriteBedAndChamberTempSettings(FileStore *f) const noexcept;	// Save some resume information
 #endif
@@ -142,14 +143,7 @@ public:
 #endif
 
 #if SUPPORT_REMOTE_COMMANDS
-	GCodeResult ConfigureHeater(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult ProcessM307New(const CanMessageHeaterModelNewNew& msg, const StringRef& reply) noexcept;
-	GCodeResult ProcessM308(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult SetFaultDetection(const CanMessageSetHeaterFaultDetectionParameters& msg, const StringRef& reply) noexcept;
-	GCodeResult SetHeaterMonitors(const CanMessageSetHeaterMonitors& msg, const StringRef& reply) noexcept;
-	GCodeResult SetTemperature(const CanMessageSetHeaterTemperature& msg, const StringRef& reply) noexcept;
-	GCodeResult TuningCommand(const CanMessageHeaterTuningCommand& msg, const StringRef& reply) noexcept;
-	GCodeResult FeedForward(const CanMessageHeaterFeedForward& msg, const StringRef& reply) noexcept;
+	GCodeResult EutProcessM308(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
 #endif
 
 	static ReadWriteLock sensorsLock;							// needs to be public so that the OMT in EndstopsManager can lock it
@@ -164,10 +158,7 @@ private:
 	ReadLockedPointer<Heater> FindHeater(int heater) const noexcept;
 	void DeleteSensor(unsigned int sn) noexcept;
 	void InsertSensor(TemperatureSensor *newSensor) noexcept;
-
-#if SUPPORT_REMOTE_COMMANDS
-	void SendHeatersStatus(CanMessageBuffer& buf) noexcept;
-#endif
+	void SetTemperature(int heater, float t, bool activeNotStandby) THROWS(GCodeException);
 
 	static ReadWriteLock heatersLock;
 
@@ -179,17 +170,11 @@ private:
 
 	float extrusionMinTemp;										// Minimum temperature to allow regular extrusion
 	float retractionMinTemp;									// Minimum temperature to allow regular retraction
-	unsigned int sensorOrderingErrors;							// Counts any issue with unordered temperature sensors
 	bool coldExtrude;											// Is cold extrusion allowed?
 	int8_t bedHeaters[MaxBedHeaters];							// Indices of the hot bed heaters to use or -1 if none is available
 	int8_t chamberHeaters[MaxChamberHeaters];					// Indices of the chamber heaters to use or -1 if none is available
 	int8_t heaterBeingTuned;									// which PID is currently being tuned
 	int8_t lastHeaterTuned;										// which PID we last finished tuning
-
-#if SUPPORT_REMOTE_COMMANDS
-	uint8_t newHeaterFaultState;								// 0 = normal, 1 = new heater fault, 2 = sent heater fault CAN message
-	uint8_t newDriverFaultState;								// 0 = normal, 1 = new driver fault, 2 = sent driver fault CAN message
-#endif
 };
 
 //***********************************************************************************************************

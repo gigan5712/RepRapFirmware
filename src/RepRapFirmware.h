@@ -22,17 +22,29 @@ Licence: GPL
 #ifndef REPRAPFIRMWARE_H
 #define REPRAPFIRMWARE_H
 
-#include <ecv_duet3d.h>
-
 #include <cstddef>		// for size_t
 #include <cfloat>
 #include <cstdarg>
 #include <climits>		// for CHAR_BIT
 
 #include <ctime>
-[[deprecated("use gmtime_r instead for thread-safety")]] tm *_ecv_null gmtime(const time_t* t);
-[[deprecated("use SafeStrptime instead")]] char *_ecv_array strptime (const char *_ecv_array buf, const char *_ecv_array format, struct tm *timeptr);
-const char *_ecv_array SafeStrptime(const char *_ecv_array buf, const char *_ecv_array format, struct tm *timeptr) noexcept;
+[[deprecated("use gmtime_r instead for thread-safety")]] tm* gmtime(const time_t* time);
+[[deprecated("use SafeStrptime instead")]] char * strptime (const char *buf, const char *format, struct tm *timeptr);
+const char *SafeStrptime(const char *buf, const char *format, struct tm *timeptr) noexcept;
+
+#include "ecv.h"
+#ifdef value
+# undef value			// needed because some files include include <optional>
+#endif
+#ifdef array
+# undef array			// needed because some files include <functional>
+#endif
+#ifdef assert
+# undef assert
+#endif
+#ifdef result
+# undef result
+#endif
 
 #include <Core.h>
 
@@ -50,18 +62,12 @@ const char *_ecv_array SafeStrptime(const char *_ecv_array buf, const char *_ecv
 # define __nocache		// nothing
 #endif
 
-#include <CoreIO.h>
-#include <Devices.h>
+# include <CoreIO.h>
+# include <Devices.h>
 
 // The following are needed by many other files, so include them here
-#include <Platform/MessageType.h>
-#include <GCodeResult.h>
-
-// Convert an error or warning result into a suitable generic message type. Should only be called with GCodeResult::warning or GCodeResult::error.
-inline MessageType GetGenericMessageType(GCodeResult rslt)
-{
-	return (rslt == GCodeResult::warning) ? WarningMessage : ErrorMessage;
-}
+# include <Platform/MessageType.h>
+# include <GCodes/GCodeResult.h>
 
 #define SPEED_CRITICAL	__attribute__((optimize("O2")))
 
@@ -73,7 +79,7 @@ constexpr unsigned int ApiLevel = 1;
 // Logical pins used for general output, servos, CCN and laser control
 typedef uint8_t LogicalPin;				// type used to represent logical pin numbers
 constexpr LogicalPin NoLogicalPin = 0xFF;
-constexpr const char * _ecv_array NoPinName = "nil";
+constexpr const char *NoPinName = "nil";
 
 // Enumeration to describe what we want to do with a pin
 enum class PinAccess : int
@@ -102,12 +108,10 @@ enum class PinUsedBy : uint8_t
 	filamentMonitor,
 	temporaryInput,
 	sensor,
-	sdCard,
-	ExtrSpeedCtrl
 };
 
-#include <Config/Pins.h>
-#include <Config/Configuration.h>
+#include "Pins.h"
+#include "Configuration.h"
 
 static_assert(MinVisibleAxes <= MinAxes);
 static_assert(NumNamedPins <= 255 || sizeof(LogicalPin) > 1, "Need 16-bit logical pin numbers");
@@ -124,6 +128,8 @@ namespace CanInterface
 
 #else
 
+typedef uint8_t CanAddress;
+
 namespace CanInterface
 {
 	inline CanAddress GetCanAddress() noexcept { return 0; }
@@ -131,19 +137,26 @@ namespace CanInterface
 
 #endif
 
-#include <General/String.h>
-#include <General/StringFunctions.h>
-#include <General/Bitmap.h>
-#include <General/SafeStrtod.h>
-#include <General/SafeVsnprintf.h>
-#include <RRF3Common.h>
+#include "General/String.h"
+#include "General/StringFunctions.h"
+#include "General/Bitmap.h"
+#include "General/SafeStrtod.h"
+#include "General/SafeVsnprintf.h"
 
 #define THROWS(...)				// expands to nothing, for providing exception specifications
 #define THROW_INTERNAL_ERROR	throw GCodeException(-1, -1, "internal error at file " __FILE__ "(%d)", (int32_t)__LINE__)
 
 // Assertion mechanism
-extern "C" [[noreturn]] void vAssertCalled(uint32_t line, const char *file) noexcept __attribute__((naked));
+extern "C" [[noreturn]] void vAssertCalled(uint32_t line, const char *file) noexcept __attribute((naked));
 #define RRF_ASSERT(_expr) do { if (!(_expr)) { vAssertCalled(__LINE__, __FILE__); } } while (false)
+
+// Struct to hold min, max and current values
+struct MinMaxCurrent
+{
+	float min;
+	float max;
+	float current;
+};
 
 // Type of a driver identifier
 struct DriverId
@@ -156,7 +169,7 @@ struct DriverId
 
 	DriverId() noexcept : localDriver(0), boardAddress(CanInterface::GetCanAddress())  { }
 
-	// Constructor used by ATE configurations and object model
+	// Constructor used by ATE configurations
 	DriverId(CanAddress addr, uint8_t drv) noexcept : localDriver(drv), boardAddress(addr) { }
 
 	void SetFromBinary(uint32_t val) noexcept
@@ -199,13 +212,10 @@ struct DriverId
 
 	DriverId() noexcept : localDriver(0)  { }
 
-	// Constructor used by object model
-	explicit DriverId(uint8_t drv) noexcept : localDriver(drv) { }
-
 	// Set the driver ID from the binary value, returning true if there was a nonzero board number so that the caller knows the address is not valid
 	bool SetFromBinary(uint32_t val) noexcept
 	{
-		localDriver = val & 0x000000FFu;
+		localDriver = val & 0x000000FF;
 		const uint32_t brdNum = val >> 16;
 		return (brdNum != 0);
 	}
@@ -264,14 +274,14 @@ enum Module : uint8_t
 	moduleFilamentSensors = 13,
 	moduleWiFi = 14,
 	moduleDisplay = 15,
-	moduleSbcInterface = 16,
+	moduleLinuxInterface = 16,
 	moduleCan = 17,
 	moduleSpeedExtr = 18,
 	numModules = 19,				// make this one greater than the last real module number
 	noModule = numModules
 };
 
-const char *_ecv_array GetModuleName(uint8_t module) noexcept;
+const char *GetModuleName(uint8_t module) noexcept;
 
 // Warn of what's to come, so we can use pointers and references to classes without including the entire header files
 class Network;
@@ -296,6 +306,7 @@ class FilamentMonitor;
 class RandomProbePointSet;
 class Logger;
 class FansManager;
+class ExtruderSpeedCtrl;
 
 #if SUPPORT_IOBITS
 class PortControl;
@@ -305,8 +316,8 @@ class PortControl;
 class Display;
 #endif
 
-#if HAS_SBC_INTERFACE
-class SbcInterface;
+#if HAS_LINUX_INTERFACE
+class LinuxInterface;
 #endif
 
 #if SUPPORT_CAN_EXPANSION
@@ -331,7 +342,11 @@ typedef Bitmap<uint32_t> DriversBitmap;			// Type of a bitmap representing a set
 typedef Bitmap<uint32_t> FansBitmap;			// Type of a bitmap representing a set of fan numbers
 typedef Bitmap<uint32_t> HeatersBitmap;			// Type of a bitmap representing a set of heater numbers
 typedef Bitmap<uint16_t> DriverChannelsBitmap;	// Type of a bitmap representing a set of drivers that typically have a common cooling fan
+#if defined(DUET3) || defined(DUET_NG)
 typedef Bitmap<uint32_t> InputPortsBitmap;		// Type of a bitmap representing a set of input ports
+#else
+typedef Bitmap<uint16_t> InputPortsBitmap;		// Type of a bitmap representing a set of input ports
+#endif
 typedef Bitmap<uint32_t> TriggerNumbersBitmap;	// Type of a bitmap representing a set of trigger numbers
 
 #if defined(DUET3) || defined(DUET3MINI)
@@ -382,7 +397,7 @@ extern "C" void debugPrintf(const char* fmt, ...) noexcept __attribute__ ((forma
 
 // Functions and globals not part of any class
 
-float HideNan(float val) noexcept;
+double HideNan(float val) noexcept;
 
 void ListDrivers(const StringRef& str, DriversBitmap drivers) noexcept;
 
@@ -396,10 +411,10 @@ void ListDrivers(const StringRef& str, DriversBitmap drivers) noexcept;
 template<class T> class SimpleRangeIterator
 {
 public:
-	explicit SimpleRangeIterator(T value_) noexcept : val(value_) {}
+	SimpleRangeIterator(T value_) noexcept : val(value_) {}
     bool operator != (SimpleRangeIterator<T> const& other) const noexcept { return val != other.val;     }
     T const& operator*() const noexcept { return val; }
-    SimpleRangeIterator<T>& operator++() noexcept { ++val; return *this; }
+    SimpleRangeIterator& operator++() noexcept { ++val; return *this; }
 
 private:
     T val;
@@ -408,7 +423,7 @@ private:
 template<class T> class SimpleRange
 {
 public:
-	explicit SimpleRange(T limit) noexcept : _end(limit) {}
+	SimpleRange(T limit) noexcept : _end(limit) {}
 	SimpleRangeIterator<T> begin() const noexcept { return SimpleRangeIterator<T>(0); }
 	SimpleRangeIterator<T> end() const noexcept { return SimpleRangeIterator<T>(_end); 	}
 
@@ -435,22 +450,6 @@ private:
 	bool running;
 };
 
-// Function to delete an object and clear the pointer. Safe to call even if the pointer is already null.
-template <typename T> void DeleteObject(T *null & ptr) noexcept
-{
-	T *null p2 = nullptr;
-	std::swap(ptr, p2);
-	delete p2;
-}
-
-// Function to make a pointer point to a new object and delete the existing object, if any. T2 must be the same as T or derived from it.
-template <typename T, typename T2> void ReplaceObject(T *null & ptr, T2* pNew) noexcept
-{
-	T *null p2 = static_cast<T *null>(pNew);
-	std::swap(ptr, p2);
-	delete p2;
-}
-
 // Common definitions used by more than one module
 
 constexpr size_t XY_AXES = 2;										// The number of Cartesian axes
@@ -460,6 +459,7 @@ constexpr size_t U_AXIS = 3;										// The assumed index of the U axis when ex
 constexpr size_t NO_AXIS = 0x3F;									// A value to represent no axis, must fit in 6 bits (see EndstopHitDetails and RemoteInputHandle) and not be a valid axis number
 
 static_assert(MaxAxesPlusExtruders <= MaxAxes + MaxExtruders);
+static_assert(MaxAxesPlusExtruders >= MinAxes + NumDefaultExtruders);
 
 #if SUPPORT_CAN_EXPANSION
 constexpr size_t MaxTotalDrivers = NumDirectDrivers + MaxCanDrivers;
@@ -480,79 +480,17 @@ const AxesBitmap XyAxes = AxesBitmap::MakeLowestNBits(XY_AXES);
 
 // Common conversion factors
 constexpr float MinutesToSeconds = 60.0;
-constexpr uint32_t iMinutesToSeconds = 60;
 constexpr float SecondsToMinutes = 1.0/MinutesToSeconds;
 constexpr float SecondsToMillis = 1000.0;
 constexpr float MillisToSeconds = 0.001;
 constexpr float InchToMm = 25.4;
 constexpr float Pi = 3.141592653589793;
-constexpr float TwoPi = 3.141592653589793 * 2.0;
+constexpr float TwoPi = 3.141592653589793 * 2;
 constexpr float DegreesToRadians = 3.141592653589793/180.0;
 constexpr float RadiansToDegrees = 180.0/3.141592653589793;
 
-// The step clock is used for timing step pulses and oyther fine-resolution timer purposes
-
-#if SAME70 || SAME5x
-// All Duet 3 boards use a common step clock rate of 750kHz so that we can sync the clocks over CAN
-constexpr uint32_t StepClockRate = 48000000/64;								// 750kHz
-#elif defined(__LPC17xx__)
-constexpr uint32_t StepClockRate = 1000000;									// 1MHz
-#else
-constexpr uint32_t StepClockRate = SystemCoreClockFreq/128;					// Duet 2 and Maestro: use just under 1MHz
-#endif
-
-constexpr uint64_t StepClockRateSquared = (uint64_t)StepClockRate * StepClockRate;
-constexpr float StepClocksToMillis = 1000.0/(float)StepClockRate;
-
-// Convert microseconds to step clocks, rounding up to the next step clock
-static inline constexpr uint32_t MicrosecondsToStepClocks(float us) noexcept
-{
-	return (uint32_t)ceilf((float)StepClockRate * 0.000001 * us);
-}
-
-// Functions to convert speeds and accelerations between seconds and step clocks
-static inline constexpr float ConvertSpeedFromMmPerSec(float speed) noexcept
-{
-	return speed * 1.0/(float)StepClockRate;
-}
-
-static inline constexpr float ConvertSpeedFromMmPerMin(float speed) noexcept
-{
-	return speed * (1.0/(float)(StepClockRate * iMinutesToSeconds));
-}
-
-static inline constexpr float ConvertSpeedFromMm(float speed, bool useSeconds) noexcept
-{
-	return speed * ((useSeconds) ? 1.0/(float)StepClockRate : 1.0/(float)(StepClockRate * iMinutesToSeconds));
-}
-
-static inline constexpr float InverseConvertSpeedToMmPerSec(float speed) noexcept
-{
-	return speed * (float)StepClockRate;
-}
-
-static inline constexpr float InverseConvertSpeedToMmPerMin(float speed) noexcept
-{
-	return speed * (float)(StepClockRate * iMinutesToSeconds);
-}
-
-static inline constexpr float InverseConvertSpeedToMm(float speed, bool useSeconds) noexcept
-{
-	return speed * (float)((useSeconds) ? StepClockRate : StepClockRate * iMinutesToSeconds);
-}
-
-static inline constexpr float ConvertAcceleration(float accel) noexcept
-{
-	return accel * (1.0/(float)StepClockRateSquared);
-}
-
-static inline constexpr float InverseConvertAcceleration(float accel) noexcept
-{
-	return accel * (float)StepClockRateSquared;
-}
-
 constexpr unsigned int MaxFloatDigitsDisplayedAfterPoint = 7;
-const char *_ecv_array GetFloatFormatString(float val, unsigned int numDigitsAfterPoint) noexcept;
+const char *GetFloatFormatString(unsigned int numDigitsAfterPoint) noexcept;
 
 #if SUPPORT_WORKPLACE_COORDINATES
 constexpr size_t NumCoordinateSystems = 9;							// G54 up to G59.3
@@ -562,14 +500,9 @@ constexpr size_t NumCoordinateSystems = 1;
 
 #define DEGREE_SYMBOL	"\xC2\xB0"									// degree-symbol encoding in UTF8
 
-#if HAS_SBC_INTERFACE
-typedef uint32_t FileHandle;
-const FileHandle noFileHandle = 0;
-#endif
-
 // Type of an offset in a file
 typedef uint32_t FilePosition;
-const FilePosition noFilePosition = 0xFFFFFFFFu;
+const FilePosition noFilePosition = 0xFFFFFFFF;
 
 //-------------------------------------------------------------------------------------------------
 // Interrupt priorities - must be chosen with care! 0 is the highest priority, 7 or 15 is the lowest.

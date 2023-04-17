@@ -36,18 +36,12 @@ public:
 	float SetFanValue(size_t fanNum, float speed) noexcept;
 	float SetFansValue(FansBitmap whichFans, float speed) noexcept;
 	bool IsFanControllable(size_t fanNum) const noexcept;
-	const char *_ecv_array GetFanName(size_t fanNum) const noexcept;
+	const char *GetFanName(size_t fanNum) const noexcept;
 	int32_t GetFanRPM(size_t fanNum) const noexcept;
 #if SUPPORT_CAN_EXPANSION
 	void ProcessRemoteFanRpms(CanAddress src, const CanMessageFansReport& msg) noexcept;
 #endif
-#if SUPPORT_REMOTE_COMMANDS
-	GCodeResult ConfigureFanPort(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult ConfigureFan(const CanMessageFanParameters& gb, const StringRef& reply) noexcept;
-	GCodeResult SetFanSpeed(const CanMessageSetFanSpeed& msg, const StringRef& reply) noexcept;
-	unsigned int PopulateFansReport(CanMessageFansReport& msg) noexcept;
-#endif
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteFanSettings(FileStore *f) const noexcept;
 #endif
 
@@ -58,9 +52,9 @@ public:
 	static ReadWriteLock fansLock;
 
 private:
-	LocalFan *CreateLocalFan(uint32_t fanNum, const char *_ecv_array pinNames, PwmFrequency freq, const StringRef& reply) noexcept;
+	LocalFan *CreateLocalFan(uint32_t fanNum, const char *pinNames, PwmFrequency freq, const StringRef& reply) noexcept;
 
-	Fan *_ecv_from fans[MaxFans];
+	Fan *fans[MaxFans];
 };
 
 #endif /* SRC_FANS_FANSMANAGER_H_ */

@@ -40,7 +40,7 @@ MenuItem::MenuItem(PixelNumber r, PixelNumber c, PixelNumber w, Alignment a, Fon
 }
 
 // Print the item at the correct place with the correct alignment
-void MenuItem::PrintAligned(Lcd& lcd, PixelNumber rightMargin) noexcept
+void MenuItem::PrintAligned(Lcd& lcd, PixelNumber tOffset, PixelNumber rightMargin) noexcept
 {
 	PixelNumber colsToSkip = 0;
 	lcd.SetFont(fontNumber);
@@ -58,7 +58,7 @@ void MenuItem::PrintAligned(Lcd& lcd, PixelNumber rightMargin) noexcept
 		}
 	}
 
-	lcd.SetCursor(row, column);
+	lcd.SetCursor(row - tOffset, column);
 	lcd.SetRightMargin(min<PixelNumber>(rightMargin, column + width));
 	lcd.TextInvert(highlighted);
 	if (colsToSkip != 0)
@@ -89,29 +89,9 @@ bool MenuItem::IsVisible() const noexcept
 					return ps == PauseState::pausing || ps == PauseState::paused;
 				}
 	case 7:		return reprap.GetGCodes().IsReallyPrintingOrResuming();
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
-	case 10:	return
-# if HAS_MASS_STORAGE
-					MassStorage::IsDriveMounted(0)
-# endif
-# if HAS_MASS_STORAGE && HAS_SBC_INTERFACE
-					||
-# endif
-# if HAS_SBC_INTERFACE
-					reprap.UsingSbcInterface()
-# endif
-					;
-	case 11:	return
-# if HAS_MASS_STORAGE
-					!MassStorage::IsDriveMounted(0)
-# endif
-# if HAS_MASS_STORAGE && HAS_SBC_INTERFACE
-					&&
-# endif
-# if HAS_SBC_INTERFACE
-					!reprap.UsingSbcInterface()
-# endif
-					;
+#if HAS_MASS_STORAGE
+	case 10:	return MassStorage::IsDriveMounted(0);
+	case 11:	return !MassStorage::IsDriveMounted(0);
 #endif
 	case 20:
 		{		const auto tool = reprap.GetCurrentOrDefaultTool();			// this can be null, especially during startup
@@ -141,12 +121,12 @@ void TextMenuItem::CorePrint(Lcd& lcd) noexcept
 	lcd.printf("%s", text);
 }
 
-void TextMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void TextMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	// We ignore the 'highlight' parameter because text items are not selectable
 	if (IsVisible() && (!drawn || itemChanged))
 	{
-		PrintAligned(lcd, rightMargin);
+		PrintAligned(lcd, tOffset, rightMargin);
 		itemChanged = false;
 		drawn = true;
 	}
@@ -186,12 +166,12 @@ void ButtonMenuItem::CorePrint(Lcd& lcd) noexcept
 	lcd.WriteSpaces(1);				// space at end to allow for highlighting
 }
 
-void ButtonMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void ButtonMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	if (IsVisible() && (itemChanged || !drawn || highlight != highlighted) && column < lcd.GetNumCols())
 	{
 		highlighted = highlight;
-		PrintAligned(lcd, rightMargin);
+		PrintAligned(lcd, tOffset, rightMargin);
 		itemChanged = false;
 		drawn = true;
 	}
@@ -318,7 +298,7 @@ void ValueMenuItem::CorePrint(Lcd& lcd) noexcept
 	}
 }
 
-void ValueMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void ValueMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	if (IsVisible())
 	{
@@ -434,11 +414,11 @@ void ValueMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noex
 					break;
 
 				case 38:	// requested speed
-					currentValue.f = reprap.GetMove().GetRequestedSpeedMmPerSec();
+					currentValue.f = reprap.GetMove().GetRequestedSpeed();
 					break;
 
 				case 39:	// top speed
-					currentValue.f = reprap.GetMove().GetTopSpeedMmPerSec();
+					currentValue.f = reprap.GetMove().GetTopSpeed();
 					break;
 
 				default:
@@ -494,7 +474,7 @@ void ValueMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noex
 		if (itemChanged || !drawn || (highlight != highlighted))
 		{
 			highlighted = highlight;
-			PrintAligned(lcd, rightMargin);
+			PrintAligned(lcd, tOffset, rightMargin);
 			itemChanged = false;
 			drawn = true;
 		}
@@ -533,11 +513,22 @@ bool ValueMenuItem::Adjust_SelectHelper() noexcept
 		switch (valIndex/100)
 		{
 		case 1: // heater active temperature
-			reprap.GetGCodes().SetItemActiveTemperature(itemNumber, (currentValue.f < 1.0) ? ABS_ZERO : currentValue.f);
+			if (1.0 > currentValue.f) // 0 is off
+			{
+				reprap.GetGCodes().SetItemActiveTemperature(itemNumber, -273.15);
+			}
+			else // otherwise ensure the tool is made active at the same time (really only matters for 79)
+			{
+				if (80 > itemNumber)
+				{
+					reprap.SelectTool(itemNumber, false);
+				}
+				reprap.GetGCodes().SetItemActiveTemperature(itemNumber, currentValue.f);
+			}
 			break;
 
 		case 2: // heater standby temperature
-			reprap.GetGCodes().SetItemStandbyTemperature(itemNumber, (currentValue.f < 1.0) ? ABS_ZERO : currentValue.f);
+			reprap.GetGCodes().SetItemStandbyTemperature(itemNumber, (1.0 > currentValue.f) ? -273.15 : currentValue.f);
 			break;
 
 		case 3: // fan %
@@ -631,7 +622,7 @@ bool ValueMenuItem::Adjust_AlterHelper(int clicks) noexcept
 				{
 					currentValue.f = 95.0 - 1.0;
 				}
-				currentValue.f = min<int>(currentValue.f + (float)clicks, reprap.GetHeat().GetHighestTemperatureLimit(reprap.GetTool(itemNumber)->GetHeater(0)));
+				currentValue.f = min<int>(currentValue.f + (float)clicks, reprap.GetHeat().GetHighestTemperatureLimit(reprap.GetTool(itemNumber)->Heater(0)));
 			}
 		}
 		else
@@ -657,7 +648,7 @@ bool ValueMenuItem::Adjust_AlterHelper(int clicks) noexcept
 
 		case 21: // 521 baby stepping
 			{
-				String<ShortGCodeLength> cmd;
+				String<SHORT_GCODE_LENGTH> cmd;
 				cmd.printf("M290 Z%.2f", (double)(0.02 * clicks));
 				(void) reprap.GetGCodes().ProcessCommandFromLcd(cmd.c_str());
 				adjusting = AdjustMode::liveAdjusting;
@@ -667,7 +658,7 @@ bool ValueMenuItem::Adjust_AlterHelper(int clicks) noexcept
 		default:
 			if (itemNumber >= 10 && itemNumber < 10 + reprap.GetGCodes().GetVisibleAxes())	// 510-518 axis position adjustment
 			{
-				String<ShortGCodeLength> cmd;
+				String<SHORT_GCODE_LENGTH> cmd;
 				const float amount = ((itemNumber == 12) ? 0.02 : 0.1) * clicks;			// 0.02mm Z resolution, 0.1mm for other axes
 				cmd.printf("M120 G91 G1 F3000 %c%.2f M121", 'X' + (itemNumber - 10), (double)amount);
 				(void) reprap.GetGCodes().ProcessCommandFromLcd(cmd.c_str());
@@ -764,7 +755,7 @@ unsigned int FilesMenuItem::uListingEntries() const noexcept
 	return bInSubdirectory() ? (1 + m_uHardItemsInDirectory) : m_uHardItemsInDirectory;
 }
 
-void FilesMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void FilesMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	// The 'highlight' parameter is not used to highlight this item, but it is still used to tell whether this item is selected or not
 	if (!IsVisible())
@@ -818,7 +809,7 @@ void FilesMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noex
 			break;
 
 		case mounted:
-			ListFiles(lcd, rightMargin, highlight);
+			ListFiles(lcd, rightMargin, highlight, tOffset);
 			break;
 
 		case error:
@@ -827,7 +818,7 @@ void FilesMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noex
 	}
 }
 
-void FilesMenuItem::ListFiles(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void FilesMenuItem::ListFiles(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	lcd.SetFont(fontNumber);
 	lcd.SetRightMargin(rightMargin);
@@ -874,7 +865,7 @@ void FilesMenuItem::ListFiles(Lcd& lcd, PixelNumber rightMargin, bool highlight)
 			}
 			--dirEntriesToSkip;
 		}
-		gotFileInfo = MassStorage::FindNext(oFileInfo);
+		gotFileInfo =  MassStorage::FindNext(oFileInfo);
 	}
 
 	// We always iterate the entire viewport so that old listing lines that may not be overwritten are cleared
@@ -1103,7 +1094,7 @@ ImageMenuItem::ImageMenuItem(PixelNumber r, PixelNumber c, Visibility vis, const
 	fileName.copy(pFileName);
 }
 
-void ImageMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noexcept
+void ImageMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight, PixelNumber tOffset) noexcept
 {
 	if (IsVisible() && (!drawn || itemChanged || highlight != highlighted))
 	{
@@ -1125,7 +1116,7 @@ void ImageMenuItem::Draw(Lcd& lcd, PixelNumber rightMargin, bool highlight) noex
 						{
 							break;
 						}
-						lcd.BitmapRow(row + irow, column,  cols, buffer, highlight);
+						lcd.BitmapRow(row - tOffset + irow, column,  cols, buffer, highlight);
 					}
 				}
 			}

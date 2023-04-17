@@ -62,13 +62,6 @@ constexpr ObjectModelArrayDescriptor Tool::heatersArrayDescriptor =
 	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue { return ExpressionValue((int32_t)((const Tool*)self)->heaters[context.GetLastIndex()]); }
 };
 
-constexpr ObjectModelArrayDescriptor Tool::feedForwardArrayDescriptor =
-{
-	nullptr,					// no lock needed
-	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t { return ((const Tool*)self)->heaterCount; },
-	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue { return ExpressionValue(((const Tool*)self)->heaterFeedForward[context.GetLastIndex()], 3); }
-};
-
 constexpr ObjectModelArrayDescriptor Tool::extrudersArrayDescriptor =
 {
 	nullptr,					// no lock needed
@@ -101,34 +94,32 @@ constexpr ObjectModelTableEntry Tool::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
 	// 0. Tool members
-	{ "active",				OBJECT_MODEL_FUNC_NOSELF(&activeTempsArrayDescriptor), 						ObjectModelEntryFlags::live },
-	{ "axes",				OBJECT_MODEL_FUNC_NOSELF(&axesArrayDescriptor), 							ObjectModelEntryFlags::none },
-	{ "extruders",			OBJECT_MODEL_FUNC_NOSELF(&extrudersArrayDescriptor), 						ObjectModelEntryFlags::none },
-	{ "fans",				OBJECT_MODEL_FUNC(self->fanMapping), 										ObjectModelEntryFlags::none },
-	{ "feedForward",		OBJECT_MODEL_FUNC_NOSELF(&feedForwardArrayDescriptor), 						ObjectModelEntryFlags::none },
-	{ "filamentExtruder",	OBJECT_MODEL_FUNC((int32_t)self->filamentExtruder),							ObjectModelEntryFlags::none },
-	{ "heaters",			OBJECT_MODEL_FUNC_NOSELF(&heatersArrayDescriptor), 							ObjectModelEntryFlags::none },
-	{ "isRetracted",		OBJECT_MODEL_FUNC(self->IsRetracted()), 									ObjectModelEntryFlags::live },
-	{ "mix",				OBJECT_MODEL_FUNC_NOSELF(&mixArrayDescriptor), 								ObjectModelEntryFlags::none },
-	{ "name",				OBJECT_MODEL_FUNC(self->name),						 						ObjectModelEntryFlags::none },
-	{ "number",				OBJECT_MODEL_FUNC((int32_t)self->myNumber),									ObjectModelEntryFlags::none },
-	{ "offsets",			OBJECT_MODEL_FUNC_NOSELF(&offsetsArrayDescriptor), 							ObjectModelEntryFlags::none },
-	{ "offsetsProbed",		OBJECT_MODEL_FUNC((int32_t)self->axisOffsetsProbed.GetRaw()),				ObjectModelEntryFlags::none },
-	{ "retraction",			OBJECT_MODEL_FUNC(self, 1),													ObjectModelEntryFlags::none },
-	{ "spindle",			OBJECT_MODEL_FUNC((int32_t)self->spindleNumber),							ObjectModelEntryFlags::none },
-	{ "spindleRpm",			OBJECT_MODEL_FUNC((int32_t)self->spindleRpm),								ObjectModelEntryFlags::none },
-	{ "standby",			OBJECT_MODEL_FUNC_NOSELF(&standbyTempsArrayDescriptor), 					ObjectModelEntryFlags::live },
-	{ "state",				OBJECT_MODEL_FUNC(self->state.ToString()), 									ObjectModelEntryFlags::live },
+	{ "active",				OBJECT_MODEL_FUNC_NOSELF(&activeTempsArrayDescriptor), 			ObjectModelEntryFlags::live },
+	{ "axes",				OBJECT_MODEL_FUNC_NOSELF(&axesArrayDescriptor), 				ObjectModelEntryFlags::none },
+	{ "extruders",			OBJECT_MODEL_FUNC_NOSELF(&extrudersArrayDescriptor), 			ObjectModelEntryFlags::none },
+	{ "fans",				OBJECT_MODEL_FUNC(self->fanMapping), 							ObjectModelEntryFlags::none },
+	{ "filamentExtruder",	OBJECT_MODEL_FUNC((int32_t)self->filamentExtruder),				ObjectModelEntryFlags::none },
+	{ "heaters",			OBJECT_MODEL_FUNC_NOSELF(&heatersArrayDescriptor), 				ObjectModelEntryFlags::none },
+	{ "mix",				OBJECT_MODEL_FUNC_NOSELF(&mixArrayDescriptor), 					ObjectModelEntryFlags::none },
+	{ "name",				OBJECT_MODEL_FUNC(self->name),						 			ObjectModelEntryFlags::none },
+	{ "number",				OBJECT_MODEL_FUNC((int32_t)self->myNumber),						ObjectModelEntryFlags::none },
+	{ "offsets",			OBJECT_MODEL_FUNC_NOSELF(&offsetsArrayDescriptor), 				ObjectModelEntryFlags::none },
+	{ "offsetsProbed",		OBJECT_MODEL_FUNC((int32_t)self->axisOffsetsProbed.GetRaw()),	ObjectModelEntryFlags::none },
+	{ "retraction",			OBJECT_MODEL_FUNC(self, 1),										ObjectModelEntryFlags::none },
+	{ "spindle",			OBJECT_MODEL_FUNC((int32_t)self->spindleNumber),				ObjectModelEntryFlags::none },
+	{ "spindleRpm",			OBJECT_MODEL_FUNC((int32_t)self->spindleRpm),					ObjectModelEntryFlags::none },
+	{ "standby",			OBJECT_MODEL_FUNC_NOSELF(&standbyTempsArrayDescriptor), 		ObjectModelEntryFlags::live },
+	{ "state",				OBJECT_MODEL_FUNC(self->state.ToString()), 						ObjectModelEntryFlags::live },
 
 	// 1. Tool.retraction members
-	{ "extraRestart",		OBJECT_MODEL_FUNC(self->retractExtra, 1),									ObjectModelEntryFlags::none },
-	{ "length",				OBJECT_MODEL_FUNC(self->retractLength, 1),									ObjectModelEntryFlags::none },
-	{ "speed" ,				OBJECT_MODEL_FUNC(InverseConvertSpeedToMmPerSec(self->retractSpeed), 1),	ObjectModelEntryFlags::none },
-	{ "unretractSpeed",		OBJECT_MODEL_FUNC(InverseConvertSpeedToMmPerSec(self->unRetractSpeed), 1),	ObjectModelEntryFlags::none },
-	{ "zHop",				OBJECT_MODEL_FUNC(self->retractHop, 2),										ObjectModelEntryFlags::none },
+	{ "extraRestart",		OBJECT_MODEL_FUNC(self->retractExtra, 1),						ObjectModelEntryFlags::none },
+	{ "length",				OBJECT_MODEL_FUNC(self->retractLength, 1),						ObjectModelEntryFlags::none },
+	{ "speed" ,				OBJECT_MODEL_FUNC(self->retractSpeed, 1),						ObjectModelEntryFlags::none },
+	{ "unretractSpeed",		OBJECT_MODEL_FUNC(self->unRetractSpeed, 1),						ObjectModelEntryFlags::none },
+	{ "zHop",				OBJECT_MODEL_FUNC(self->retractHop, 2),							ObjectModelEntryFlags::none },
 };
 
-constexpr uint8_t Tool::objectModelTableDescriptor[] = { 2, 18, 5 };
+constexpr uint8_t Tool::objectModelTableDescriptor[] = { 2, 16, 5 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(Tool)
 
@@ -189,7 +180,7 @@ DEFINE_GET_OBJECT_MODEL_TABLE(Tool)
 	{
 		// Use exactly only one Filament instance per extruder drive
 		Filament * const filament = Filament::GetFilamentByExtruder(filamentDrive);
-		t->filament = (filament == nullptr) ? new Filament(filamentDrive) : filament;
+		t->filament = (filament == nullptr) ? new Filament(d[0]) : filament;
 		t->filamentExtruder = filamentDrive;
 	}
 	else
@@ -225,7 +216,7 @@ DEFINE_GET_OBJECT_MODEL_TABLE(Tool)
 	t->retractLength = DefaultRetractLength;
 	t->retractExtra = 0.0;
 	t->retractHop = 0.0;
-	t->retractSpeed = t->unRetractSpeed = ConvertSpeedFromMmPerMin(DefaultRetractSpeed);
+	t->retractSpeed = t->unRetractSpeed = DefaultRetractSpeed * SecondsToMinutes;
 	t->isRetracted = false;
 	t->spindleNumber = spindleNo;
 	t->spindleRpm = 0;
@@ -248,7 +239,6 @@ DEFINE_GET_OBJECT_MODEL_TABLE(Tool)
 		t->heaters[heater] = heaterNumber;
 		t->activeTemperatures[heater] = ABS_ZERO;
 		t->standbyTemperatures[heater] = ABS_ZERO;
-		t->heaterFeedForward[heater] = 0.0;
 	}
 
 	if (t->filament != nullptr)
@@ -279,7 +269,7 @@ DEFINE_GET_OBJECT_MODEL_TABLE(Tool)
 	return (tool == nullptr) ? 0.0 : tool->offset[axis];
 }
 
-void Tool::PrintTool(const StringRef& reply) const noexcept
+void Tool::Print(const StringRef& reply) const noexcept
 {
 	reply.printf("Tool %u - ", myNumber);
 	if (name != nullptr)
@@ -421,12 +411,25 @@ bool Tool::AllHeatersAtHighTemperature(bool forExtrusion) const noexcept
 	return true;
 }
 
-// Activate this tool. Must set the current tool to be this tool first, otherwise the heater temperature may not get set.
 void Tool::Activate() noexcept
 {
-	HeatersToActiveOrStandby(true);
-
-	if (spindleNumber >= 0)
+	for (size_t heater = 0; heater < heaterCount; heater++)
+	{
+		try
+		{
+			reprap.GetHeat().SetActiveTemperature(heaters[heater], activeTemperatures[heater]);
+			reprap.GetHeat().SetStandbyTemperature(heaters[heater], standbyTemperatures[heater]);
+		}
+		catch (const GCodeException& exc)
+		{
+			String<StringLength100> message;
+			exc.GetMessage(message.GetRef(), nullptr);
+			reprap.GetPlatform().Message(ErrorMessage, message.c_str());
+		}
+		String<1> dummy;
+		(void)reprap.GetHeat().Activate(heaters[heater], dummy.GetRef());
+	}
+	if (spindleNumber > -1)
 	{
 		Spindle& spindle = reprap.GetPlatform().AccessSpindle(spindleNumber);
 
@@ -439,46 +442,48 @@ void Tool::Activate() noexcept
 	state = ToolState::active;
 }
 
-void Tool::Standby() noexcept
-{
-	HeatersToActiveOrStandby(false);
-
-	// NIST Standard M6 says "When the tool change is complete: * The spindle will be stopped. [...]"
-	// We don't have M6 but Tn already does tool change so we need
-	// to make sure the spindle is off
-	if (spindleNumber >= 0)
-	{
-		Spindle& spindle = reprap.GetPlatform().AccessSpindle(spindleNumber);
-		spindle.SetState(SpindleState::stopped);
-	}
-
-	state = ToolState::standby;
-}
-
-void Tool::HeatersToActiveOrStandby(bool active) const noexcept
+void Tool::HeatersToStandby() const noexcept
 {
 	const Tool * const currentTool = reprap.GetCurrentTool();
-	for (size_t heaterIndex = 0; heaterIndex < heaterCount; heaterIndex++)
+	for (size_t heater = 0; heater < heaterCount; heater++)
 	{
-		const int heaterNumber = heaters[heaterIndex];
-		// Don't switch a heater to active if the active tool is using it and is different from this tool
-		if (currentTool == this || currentTool == nullptr || !currentTool->UsesHeater(heaterNumber))
+		// Don't switch a heater to standby if the active tool is using it and is different from this tool
+		if (currentTool == this || currentTool == nullptr || !currentTool->UsesHeater(heater))
 		{
-			String<StringLength100> message;
-			GCodeResult ret;
 			try
 			{
-				reprap.GetHeat().SetTemperature(heaterNumber, ((active) ? activeTemperatures[heaterIndex] : standbyTemperatures[heaterIndex]), active);
-				ret = reprap.GetHeat().SetActiveOrStandby(heaterNumber, this, active, message.GetRef());
+				reprap.GetHeat().SetStandbyTemperature(heaters[heater], standbyTemperatures[heater]);
+				reprap.GetHeat().Standby(heaters[heater], this);
 			}
 			catch (const GCodeException& exc)
 			{
+				String<StringLength100> message;
 				exc.GetMessage(message.GetRef(), nullptr);
-				ret = GCodeResult::error;
+				reprap.GetPlatform().Message(ErrorMessage, message.c_str());
 			}
-			if (ret != GCodeResult::ok)
+		}
+	}
+}
+
+void Tool::HeatersToActive() const noexcept
+{
+	const Tool * const currentTool = reprap.GetCurrentTool();
+	for (size_t heater = 0; heater < heaterCount; heater++)
+	{
+		// Don't switch a heater to active if the active tool is using it and is different from this tool
+		if (currentTool == this || currentTool == nullptr || !currentTool->UsesHeater(heater))
+		{
+			try
 			{
-				reprap.GetPlatform().MessageF((ret == GCodeResult::warning) ? WarningMessage : ErrorMessage, "%s\n", message.c_str());
+				reprap.GetHeat().SetActiveTemperature(heaters[heater], activeTemperatures[heater]);
+				String<1> dummy;
+				(void)reprap.GetHeat().Activate(heaters[heater], dummy.GetRef());
+			}
+			catch (const GCodeException& exc)
+			{
+				String<StringLength100> message;
+				exc.GetMessage(message.GetRef(), nullptr);
+				reprap.GetPlatform().Message(ErrorMessage, message.c_str());
 			}
 		}
 	}
@@ -487,15 +492,30 @@ void Tool::HeatersToActiveOrStandby(bool active) const noexcept
 void Tool::HeatersToOff() const noexcept
 {
 	const Tool * const currentTool = reprap.GetCurrentTool();
-	for (size_t heaterIndex = 0; heaterIndex < heaterCount; heaterIndex++)
+	for (size_t heater = 0; heater < heaterCount; heater++)
 	{
-		const int heaterNumber = heaters[heaterIndex];
 		// Don't switch a heater to standby if the active tool is using it and is different from this tool
-		if (currentTool == this || currentTool == nullptr || !currentTool->UsesHeater(heaterNumber))
+		if (currentTool == this || currentTool == nullptr || !currentTool->UsesHeater(heater))
 		{
-			reprap.GetHeat().SwitchOff(heaterNumber);
+			reprap.GetHeat().SwitchOff(heaters[heater]);
 		}
 	}
+}
+
+void Tool::Standby() noexcept
+{
+	HeatersToStandby();
+
+	// NIST Standard M6 says "When the tool change is complete: * The spindle will be stopped. [...]"
+	// We don't have M6 but Tn already does tool change so we need
+	// to make sure the spindle is off
+	if (spindleNumber > -1)
+	{
+		Spindle& spindle = reprap.GetPlatform().AccessSpindle(spindleNumber);
+		spindle.SetState(SpindleState::stopped);
+	}
+
+	state = ToolState::standby;
 }
 
 // May be called from ISR
@@ -551,7 +571,7 @@ void Tool::DefineMix(const float m[]) noexcept
 	reprap.ToolsUpdated();
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 // Write the tool's settings to file returning true if successful. The settings written leave the tool selected unless it is off.
 bool Tool::WriteSettings(FileStore *f) const noexcept
@@ -610,18 +630,16 @@ float Tool::GetToolHeaterStandbyTemperature(size_t heaterNumber) const noexcept
 	return (heaterNumber < heaterCount) ? standbyTemperatures[heaterNumber] : 0.0;
 }
 
-void Tool::SetToolHeaterActiveOrStandbyTemperature(size_t heaterNumber, float temp, bool active) THROWS(GCodeException)
+void Tool::SetToolHeaterActiveTemperature(size_t heaterNumber, float temp) THROWS(GCodeException)
 {
 	if (heaterNumber < heaterCount)
 	{
-		float& relevantTemperature = (active) ? activeTemperatures[heaterNumber] : standbyTemperatures[heaterNumber];
 		const int8_t heater = heaters[heaterNumber];
 		const Tool * const currentTool = reprap.GetCurrentTool();
-		const Tool * const lastStandbyTool = reprap.GetHeat().GetLastStandbyTool(heater);
-		const bool setHeater = (currentTool == nullptr || currentTool == this || (!active && (lastStandbyTool == nullptr || lastStandbyTool == this)));
-		if (temp <= NEARLY_ABS_ZERO)								// temperatures close to ABS_ZERO turn off the heater
+		const bool setHeater = (currentTool == nullptr || currentTool == this);
+		if (temp < NEARLY_ABS_ZERO)								// temperatures close to ABS_ZERO turn off the heater
 		{
-			relevantTemperature = 0;
+			activeTemperatures[heaterNumber] = 0;
 			if (setHeater)
 			{
 				reprap.GetHeat().SwitchOff(heater);
@@ -633,10 +651,41 @@ void Tool::SetToolHeaterActiveOrStandbyTemperature(size_t heaterNumber, float te
 			{
 				throw GCodeException(-1, -1, "Requested temperature out of range");
 			}
-			relevantTemperature = temp;
+			activeTemperatures[heaterNumber] = temp;
 			if (setHeater)
 			{
-				reprap.GetHeat().SetTemperature(heater, temp, active);
+				reprap.GetHeat().SetActiveTemperature(heater, temp);
+			}
+		}
+	}
+}
+
+void Tool::SetToolHeaterStandbyTemperature(size_t heaterNumber, float temp) THROWS(GCodeException)
+{
+	if (heaterNumber < heaterCount)
+	{
+		const int8_t heater = heaters[heaterNumber];
+		const Tool * const currentTool = reprap.GetCurrentTool();
+		const Tool * const lastStandbyTool = reprap.GetHeat().GetLastStandbyTool(heater);
+		const bool setHeater = (currentTool == nullptr || currentTool == this || lastStandbyTool == nullptr || lastStandbyTool == this);
+		if (temp < NEARLY_ABS_ZERO)								// temperatures close to ABS_ZERO turn off the heater
+		{
+			standbyTemperatures[heaterNumber] = 0;
+			if (setHeater)
+			{
+				reprap.GetHeat().SwitchOff(heater);
+			}
+		}
+		else
+		{
+			if (temp <= reprap.GetHeat().GetLowestTemperatureLimit(heater) || temp >= reprap.GetHeat().GetHighestTemperatureLimit(heater))
+			{
+				throw GCodeException(-1, -1, "Requested temperature out of range");
+			}
+			standbyTemperatures[heaterNumber] = temp;
+			if (setHeater)
+			{
+				reprap.GetHeat().SetStandbyTemperature(heater, temp);
 			}
 		}
 	}
@@ -727,12 +776,12 @@ GCodeResult Tool::SetFirmwareRetraction(GCodeBuffer &gb, const StringRef &reply,
 	}
 	if (gb.Seen('F'))
 	{
-		unRetractSpeed = retractSpeed = max<float>(gb.GetSpeedFromMm(false), ConvertSpeedFromMmPerMin(MinRetractSpeed));
+		unRetractSpeed = retractSpeed = max<float>(gb.GetFValue(), 60.0) * SecondsToMinutes;
 		seen = true;
 	}
 	if (gb.Seen('T'))	// must do this one after 'F'
 	{
-		unRetractSpeed = max<float>(gb.GetSpeedFromMm(false), ConvertSpeedFromMmPerMin(MinRetractSpeed));
+		unRetractSpeed = max<float>(gb.GetFValue(), 60.0) * SecondsToMinutes;
 		seen = true;
 	}
 	if (gb.Seen('Z'))
@@ -753,49 +802,9 @@ GCodeResult Tool::SetFirmwareRetraction(GCodeBuffer &gb, const StringRef &reply,
 			return GCodeResult::notFinished;
 		}
 		outBuf->lcatf("Tool %u retract/reprime: length %.2f/%.2fmm, speed %.1f/%.1fmm/sec, Z hop %.2fmm",
-			myNumber, (double)retractLength, (double)(retractLength + retractExtra), (double)InverseConvertSpeedToMmPerSec(retractSpeed), (double)InverseConvertSpeedToMmPerSec(unRetractSpeed), (double)retractHop);
+			myNumber, (double)retractLength, (double)(retractLength + retractExtra), (double)retractSpeed, (double)unRetractSpeed, (double)retractHop);
 	}
 	return GCodeResult::ok;
-}
-
-GCodeResult Tool::GetSetFeedForward(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException)
-{
-	if (gb.Seen('S'))
-	{
-		size_t numValues = heaterCount;
-		gb.GetFloatArray(heaterFeedForward, numValues, false);
-		ToolUpdated();
-	}
-	else
-	{
-		reply.printf("Tool %u heater feedforward:", myNumber);
-		for (size_t i = 0; i < heaterCount; ++i)
-		{
-			reply.catf(" %.3f", (double)heaterFeedForward[i]);
-		}
-	}
-
-	return GCodeResult::ok;
-}
-
-// Apply feedforward to the current tool. Called from an ISR context or with BASEPRI set high.
-void Tool::ApplyFeedForward(float extrusionSpeed) const noexcept
-{
-	Heat& heat = reprap.GetHeat();
-	for (size_t i = 0; i < heaterCount; ++i)
-	{
-		heat.SetExtrusionFeedForward(heaters[i], extrusionSpeed * heaterFeedForward[i]);
-	}
-}
-
-// Stop applying feedforward to the current tool. Called from an ISR context or with BASEPRI set high.
-void Tool::StopFeedForward() const noexcept
-{
-	Heat& heat = reprap.GetHeat();
-	for (size_t i = 0; i < heaterCount; ++i)
-	{
-		heat.SetExtrusionFeedForward(heaters[i], 0.0);
-	}
 }
 
 // End

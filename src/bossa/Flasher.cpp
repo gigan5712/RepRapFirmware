@@ -28,15 +28,11 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "Flasher.h"
-#include <RepRapFirmware.h>
-
-#if SUPPORT_PANELDUE_FLASH
-
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
 #include <General/Vector.hpp>
-#if HAS_SBC_INTERFACE
-# include <SBC/SbcInterface.h>
+#if HAS_LINUX_INTERFACE
+# include <Linux/LinuxInterface.h>
 #endif
 
 void Flasher::erase(uint32_t foffset) THROWS(GCodeException)
@@ -202,7 +198,5 @@ void Flasher::lock(/* string& regionArg, */ bool enable) THROWS(GCodeException)
     }
 #endif
 }
-
-#endif
 
 // End

@@ -172,23 +172,14 @@ Licence: GPL
 RepRap reprap;
 
 // Get the format string to use for printing a floating point number to the specified number of decimal digits. Zero means the maximum sensible number.
-const char *_ecv_array GetFloatFormatString(float val, unsigned int numDigitsAfterPoint) noexcept
+const char *GetFloatFormatString(unsigned int numDigitsAfterPoint) noexcept
 {
-	static constexpr const char *_ecv_array FormatStrings[] = { "%.7f", "%.1f", "%.2f", "%.3f", "%.4f", "%.5f", "%.6f", "%.7f" };
+	static constexpr const char *FormatStrings[] = { "%.7f", "%.1f", "%.2f", "%.3f", "%.4f", "%.5f", "%.6f", "%.7f" };
 	static_assert(ARRAY_SIZE(FormatStrings) == MaxFloatDigitsDisplayedAfterPoint + 1);
-
-	float f = 1.0;
-	unsigned int maxDigitsAfterPoint = MaxFloatDigitsDisplayedAfterPoint;
-	while (maxDigitsAfterPoint > 1 && val >= f)
-	{
-		f *= 10.0;
-		--maxDigitsAfterPoint;
-	}
-
-	return FormatStrings[min<unsigned int>(numDigitsAfterPoint, maxDigitsAfterPoint)];
+	return FormatStrings[min<unsigned int>(numDigitsAfterPoint, MaxFloatDigitsDisplayedAfterPoint)];
 }
 
-static const char *_ecv_array const moduleName[] =
+static const char * const moduleName[] =
 {
 	"Platform",
 	"Network",
@@ -206,7 +197,7 @@ static const char *_ecv_array const moduleName[] =
 	"FilamentSensors",
 	"WiFi",
 	"Display",
-	"SbcInterface",
+	"LinuxInterface",
 	"CAN",
 	"SpeedExtr",
 	"none"
@@ -214,7 +205,7 @@ static const char *_ecv_array const moduleName[] =
 
 static_assert(ARRAY_SIZE(moduleName) == Module::numModules + 1);
 
-const char *_ecv_array GetModuleName(uint8_t module) noexcept
+const char *GetModuleName(uint8_t module) noexcept
 {
 	return (module < ARRAY_SIZE(moduleName)) ? moduleName[module] : "unknown";
 }
@@ -250,7 +241,7 @@ bool MillisTimer::CheckAndStop(uint32_t timeoutMillis) noexcept
 // Utilities and storage not part of any class
 
 // For debug use
-void debugPrintf(const char *_ecv_array fmt, ...) noexcept
+void debugPrintf(const char* fmt, ...) noexcept
 {
 	// Calls to debugPrintf() from with ISRs are unsafe, both because of timing issues and because the call to Platform::MessageF tries to acquire a mutex.
 	// So ignore the call if we are coming from within an ISR.
@@ -264,15 +255,15 @@ void debugPrintf(const char *_ecv_array fmt, ...) noexcept
 }
 
 // Convert a float to double for passing to printf etc. If it is a NaN or infinity, convert it to 9999.9 to avoid getting JSON parse errors.
-float HideNan(float val) noexcept
+double HideNan(float val) noexcept
 {
-	return (std::isnan(val) || std::isinf(val)) ? 9999.9 : val;
+	return (double)((std::isnan(val) || std::isinf(val)) ? 9999.9 : val);
 }
 
 // Append a list of driver numbers to a string, with a space before each one
 void ListDrivers(const StringRef& str, DriversBitmap drivers) noexcept
 {
-	drivers.Iterate([&str](unsigned int d, unsigned int) noexcept -> void { str.catf(" %u", d); });
+	drivers.Iterate([&str](unsigned int d, unsigned int) noexcept { str.catf(" %u", d); });
 }
 
 // End

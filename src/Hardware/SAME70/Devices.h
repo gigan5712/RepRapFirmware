@@ -9,6 +9,7 @@
 #define SRC_HARDWARE_SAME70_DEVICES_H_
 
 #include <AsyncSerial.h>
+typedef AsyncSerial UARTClass;
 #include <USARTClass.h>
 
 extern AsyncSerial Serial;

@@ -42,8 +42,6 @@
 #ifndef __LWIPOPTS_H__
 #define __LWIPOPTS_H__
 
-#include <ecv_duet3d.h>
-
 /* Include ethernet configuration first */
 #include "conf_eth.h"
 
@@ -86,8 +84,6 @@
 
 /* Uncomment following line to use DHCP instead of fixed IP */
 #define DHCP_USED
-
-#define LWIP_CHKSUM_ALGORITHM		3		// use fastest checksum algorithm (does 8 bytes at a time)
 
 /*
    ------------------------------------

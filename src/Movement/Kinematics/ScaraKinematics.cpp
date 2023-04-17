@@ -6,9 +6,6 @@
  */
 
 #include "ScaraKinematics.h"
-
-#if SUPPORT_SCARA
-
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
 #include <Storage/MassStorage.h>
@@ -226,13 +223,13 @@ bool ScaraKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const Strin
 		}
 		else if (!seenNonGeometry && !gb.Seen('K'))
 		{
-			Kinematics::Configure(mCode, gb, reply, error);
-			reply.printf(", proximal arm %.2fmm range %.1f to %.1f" DEGREE_SYMBOL
-							"%s, distal arm %.2fmm range %.1f to %.1f" DEGREE_SYMBOL "%s, crosstalk %.1f:%.1f:%.1f, bed origin (%.1f, %.1f)",
+			reply.printf("Kinematics is Scara with proximal arm %.2fmm range %.1f to %.1f" DEGREE_SYMBOL
+							"%s, distal arm %.2fmm range %.1f to %.1f" DEGREE_SYMBOL "%s, crosstalk %.1f:%.1f:%.1f, bed origin (%.1f, %.1f), segments/sec %d, min. segment length %.2f",
 							(double)proximalArmLength, (double)thetaLimits[0], (double)thetaLimits[1], (supportsContinuousRotation[0]) ? " (continuous)" : "",
 							(double)distalArmLength, (double)psiLimits[0], (double)psiLimits[1], (supportsContinuousRotation[0]) ? " (continuous)" : "",
 							(double)crosstalk[0], (double)crosstalk[1], (double)crosstalk[2],
-							(double)xOffset, (double)yOffset);
+							(double)xOffset, (double)yOffset,
+							(int)GetSegmentsPerSecond(), (double)GetMinSegmentLength());
 		}
 		return seen;
 	}
@@ -242,8 +239,8 @@ bool ScaraKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const Strin
 	}
 }
 
-// Return true if the specified XY position is reachable by the print head reference point
-bool ScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept
+// Return true if the specified XY position is reachable by the print head reference point, ignoring M208 limits.
+bool ScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept
 {
 	if (axes.IsBitSet(X_AXIS) && axes.IsBitSet(Y_AXIS))
 	{
@@ -251,14 +248,14 @@ bool ScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) co
 		float coords[2] = {axesCoords[X_AXIS], axesCoords[Y_AXIS]};
 		float theta, psi;
 		bool armMode = currentArmMode;
-		if (!CalculateThetaAndPsi(coords, false, theta, psi, armMode))
+		if (!CalculateThetaAndPsi(coords, isCoordinated, theta, psi, armMode))
 		{
 			return false;
 		}
 	}
 	axes.ClearBit(X_AXIS);
 	axes.ClearBit(Y_AXIS);
-	return Kinematics::IsReachable(axesCoords, axes);
+	return Kinematics::IsReachable(axesCoords, axes, isCoordinated);
 }
 
 // Limit the Cartesian position that the user wants to move to, returning true if any coordinates were changed
@@ -374,6 +371,26 @@ AxesBitmap ScaraKinematics::MustBeHomedAxes(AxesBitmap axesMoving, bool disallow
 	return axesMoving;
 }
 
+size_t ScaraKinematics::NumHomingButtons(size_t numVisibleAxes) const noexcept
+{
+#if HAS_MASS_STORAGE
+	const Platform& platform = reprap.GetPlatform();
+	if (!platform.SysFileExists(HomeProximalFileName))
+	{
+		return 0;
+	}
+	if (!platform.SysFileExists(HomeDistalFileName))
+	{
+		return 1;
+	}
+	if (!platform.SysFileExists("homez.g"))
+	{
+		return 2;
+	}
+#endif
+	return numVisibleAxes;
+}
+
 // This function is called when a request is made to home the axes in 'toBeHomed' and the axes in 'alreadyHomed' have already been homed.
 // If we can proceed with homing some axes, return the name of the homing file to be called.
 // If we can't proceed because other axes need to be homed first, return nullptr and pass those axes back in 'mustBeHomedFirst'.
@@ -453,6 +470,22 @@ void ScaraKinematics::OnHomingSwitchTriggered(size_t axis, bool highEnd, const f
 	}
 }
 
+// Limit the speed and acceleration of a move to values that the mechanics can handle.
+// The speeds in Cartesian space have already been limited.
+void ScaraKinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept
+{
+	// For now we limit the speed in the XY plane to the lower of the X and Y maximum speeds, and similarly for the acceleration.
+	// Limiting the angular rates of the arms would be better.
+	const float xyFactor = fastSqrtf(fsquare(normalisedDirectionVector[X_AXIS]) + fsquare(normalisedDirectionVector[Y_AXIS]));
+	if (xyFactor > 0.01)
+	{
+		const Platform& platform = reprap.GetPlatform();
+		const float maxSpeed = min<float>(platform.MaxFeedrate(X_AXIS), platform.MaxFeedrate(Y_AXIS));
+		const float maxAcceleration = min<float>(platform.Acceleration(X_AXIS), platform.Acceleration(Y_AXIS));
+		dda.LimitSpeedAndAcceleration(maxSpeed/xyFactor, maxAcceleration/xyFactor);
+	}
+}
+
 // Return true if the specified axis is a continuous rotation axis
 bool ScaraKinematics::IsContinuousRotationAxis(size_t axis) const noexcept
 {
@@ -496,7 +529,5 @@ void ScaraKinematics::Recalc() noexcept
 
 	cachedX = cachedY = std::numeric_limits<float>::quiet_NaN();		// make sure that the cached values won't match any coordinates
 }
-
-#endif // SUPPORT_SCARA
 
 // End

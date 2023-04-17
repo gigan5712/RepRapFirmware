@@ -83,12 +83,13 @@ Network::Network(Platform& p) noexcept : platform(p)
 #endif
 {
 #if HAS_NETWORKING
-#if defined(DUET3_MB6HC) || defined(DUET3_MB6XD)
+#if defined(DUET3_V03)
 	interfaces[0] = new LwipEthernetInterface(p);
-#elif defined(DUET_NG) || defined(DUET3MINI_V04)
+	interfaces[1] = new WiFiInterface(p);
+#elif defined(SAME70XPLD) || defined(DUET3_V05) || defined(DUET3_V06)
+	interfaces[0] = new LwipEthernetInterface(p);
+#elif defined(DUET_NG) || defined(DUET3MINI)
 	interfaces[0] = nullptr;			// we set this up in Init()
-#elif defined(FMDC_V02) || defined(FMDC_V03)
-	interfaces[0] = new WiFiInterface(p);
 #elif defined(DUET_M)
 	interfaces[0] = new W5500Interface(p);
 #elif defined(__LPC17xx__)
@@ -100,7 +101,7 @@ Network::Network(Platform& p) noexcept : platform(p)
 #else
 # error Unknown board
 #endif
-#endif // HAS_NETWORKING
+#endif // HAS_NETWORK
 }
 
 #if SUPPORT_OBJECT_MODEL
@@ -175,13 +176,13 @@ void Network::Init() noexcept
 #  endif
 # endif
 
-# if defined(DUET3MINI_V04)
+# if defined(DUET3MINI)
 #  if HAS_WIFI_NETWORKING && HAS_LWIP_NETWORKING
 	interfaces[0] = (platform.IsDuetWiFi()) ? static_cast<NetworkInterface*>(new WiFiInterface(platform)) : static_cast<NetworkInterface*>(new LwipEthernetInterface(platform));
 #  elif HAS_WIFI_NETWORKING
 	interfaces[0] = static_cast<NetworkInterface*>(new WiFiInterface(platform));
 #  elif HAS_LWIP_NETWORKING
-	interfaces[0] = static_cast<NetworkInterface*>(new LwipEthernetInterface(platform));
+	interfaces[0] = static_cast<NetworkInterface*>new LwipEthernetInterface(platform);
 #  endif
 # endif
 
@@ -550,7 +551,7 @@ void Network::Diagnostics(MessageType mtype) noexcept
 #if HAS_NETWORKING
 	platform.Message(mtype, "=== Network ===\n");
 
-	platform.MessageF(mtype, "Slowest loop: %.2fms; fastest: %.2fms\n", (double)(slowLoop * StepClocksToMillis), (double)(fastLoop * StepClocksToMillis));
+	platform.MessageF(mtype, "Slowest loop: %.2fms; fastest: %.2fms\n", (double)(slowLoop * StepTimer::StepClocksToMillis), (double)(fastLoop * StepTimer::StepClocksToMillis));
 	fastLoop = UINT32_MAX;
 	slowLoop = 0;
 

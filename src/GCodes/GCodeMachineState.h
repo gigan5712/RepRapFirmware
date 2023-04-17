@@ -45,35 +45,35 @@ enum class GCodeState : uint8_t
 	toolChange0,
 	toolChange1,
 	toolChange2,
+	toolChange3,
 	toolChangeComplete,
 
 	// These next 6 must be contiguous
 	m109ToolChange0,
 	m109ToolChange1,
 	m109ToolChange2,
+	m109ToolChange3,
 	m109ToolChangeComplete,
 	m109WaitForTemperature,
 
-	// These pairs must be contiguous
 	pausing1,
 	pausing2,
 
-	eventPausing1,
-	eventPausing2,
-
 	filamentChangePause1,
 	filamentChangePause2,
+
+	filamentErrorPause1,
+	filamentErrorPause2,
 
 	resuming1,
 	resuming2,
 	resuming3,
 
-	cancelling,
-
 	flashing1,
 	flashing2,
 
-	stopping,
+	stoppingWithHeatersOff,
+	stoppingWithHeatersOn,
 
 	// These next 9 must be contiguous
 	gridProbing1,
@@ -110,20 +110,18 @@ enum class GCodeState : uint8_t
 	unloadingFilament,
 
 	checkError,						// go to this state after doing a macro when we need to check for a stored error message
-	processingEvent,
-	finishedProcessingEvent,
 
 #if HAS_MASS_STORAGE
 	timingSDwrite,
 	timingSDread,
 #endif
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	waitingForAcknowledgement,
 #endif
 
 #if HAS_VOLTAGE_MONITOR
-	powerFailPausing1,
+	powerFailPausing1
 #endif
 };
 
@@ -140,7 +138,7 @@ enum class BlockType : uint8_t
 	loop						// block inside a 'while' command
 };
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 typedef uint8_t FileId;
 
 constexpr FileId NoFileId = 0;
@@ -179,7 +177,8 @@ public:
 		BlockType blockType;										// the type of this block
 	};
 
-	DECLARE_FREELIST_NEW_DELETE(GCodeMachineState)
+	void* operator new(size_t sz) noexcept { return FreelistManager::Allocate<GCodeMachineState>(); }
+	void operator delete(void* p) noexcept { FreelistManager::Release<GCodeMachineState>(p); }
 
 	GCodeMachineState() noexcept;
 	GCodeMachineState(GCodeMachineState&, bool withinSameFile) noexcept;	// this chains the new one to the previous one
@@ -195,19 +194,14 @@ public:
 	GCodeMachineState *Pop() const noexcept;
 	uint8_t GetBlockNesting() const noexcept { return blockNesting; }
 
-	void SetMacroRestartable(bool b) noexcept { macroRestartable = b; }
-	bool CanRestartMacro() const noexcept;
-
 	VariableSet variables;											// local variables and parameters
 	float feedRate;
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	FileData fileState;
 #endif
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	FileId fileId;													// virtual ID to distinguish files in different stack levels (only unique per GB)
 #endif
-	// Note, having a bit set in lockedResources doesn't necessarily mean that we own the lock!
-	// It means we acquired the lock at this stack level, and haven't released it at this level. It may have been released at a more nested level, or stolen from us (see GrabResource).
 	ResourceBitmap lockedResources;
 	BlockState blockStates[MaxBlockIndent];
 	uint32_t lineNumber;
@@ -227,11 +221,8 @@ public:
 		waitingForAcknowledgement : 1,
 		messageAcknowledged : 1,
 		messageCancelled : 1,
-		localPush : 1,							// true if this stack frame was created by M120, so we use the parent variables
-		macroRestartable : 1,					// true if the current macro has used M98 R1 to say that it can be interrupted and restarted
-		firstCommandAfterRestart : 1,			// true if this is the first command after restarting a macro that was interrupted
-		commandRepeated : 1						// true if the current command is being repeated because it returned GCodeResult::notFinished the first time
-#if HAS_SBC_INTERFACE
+		localPush : 1							// true if this stack frame was created by M120, so we use the parent variables
+#if HAS_LINUX_INTERFACE
 		, lastCodeFromSbc : 1,
 		macroStartedByCode : 1,
 		fileFinished : 1
@@ -246,7 +237,7 @@ public:
 
 	void WaitForAcknowledgement() noexcept;
 
-#if HAS_SBC_INTERFACE
+#if HAS_LINUX_INTERFACE
 	void SetFileExecuting() noexcept;
 #endif
 

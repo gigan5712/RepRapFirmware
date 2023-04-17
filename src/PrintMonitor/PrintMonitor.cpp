@@ -47,21 +47,6 @@ const ObjectModelArrayDescriptor PrintMonitor::filamentArrayDescriptor =
 			{ return  ExpressionValue(((const PrintMonitor*)self)->printingFileInfo.filamentNeeded[context.GetIndex(0)], 1); }
 };
 
-const ObjectModelArrayDescriptor PrintMonitor::thumbnailArrayDescriptor =
-{
-	&printMonitorLock,
-	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t
-			{
-				size_t count = 0;
-				while (count < MaxThumbnails && ((const PrintMonitor*)self)->printingFileInfo.thumbnails[count].IsValid())
-				{
-					count++;
-				}
-				return count;
-			},
-	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue { return ExpressionValue(self, 2); }
-};
-
 constexpr ObjectModelTableEntry PrintMonitor::objectModelTable[] =
 {
 	// Within each group, these entries must be in alphabetical order
@@ -71,7 +56,7 @@ constexpr ObjectModelTableEntry PrintMonitor::objectModelTable[] =
 #endif
 	{ "duration",			OBJECT_MODEL_FUNC_IF(self->IsPrinting(), self->GetPrintOrSimulatedDuration()), 										ObjectModelEntryFlags::live },
 	{ "file",				OBJECT_MODEL_FUNC(self, 1),							 																ObjectModelEntryFlags::none },
-	{ "filePosition",		OBJECT_MODEL_FUNC(self->gCodes.GetFilePosition()),																	ObjectModelEntryFlags::live },
+	{ "filePosition",		OBJECT_MODEL_FUNC((uint64_t)self->gCodes.GetFilePosition()),														ObjectModelEntryFlags::live },
 	{ "firstLayerDuration", OBJECT_MODEL_FUNC_NOSELF(nullptr), 																					ObjectModelEntryFlags::obsolete },
 	{ "lastDuration",		OBJECT_MODEL_FUNC_IF(!self->IsPrinting(), (int32_t)self->gCodes.GetLastDuration()), 								ObjectModelEntryFlags::none },
 	{ "lastFileName",		OBJECT_MODEL_FUNC_IF(!self->filenameBeingPrinted.IsEmpty() && !self->IsPrinting(), self->filenameBeingPrinted.c_str()), ObjectModelEntryFlags::none },
@@ -80,37 +65,30 @@ constexpr ObjectModelTableEntry PrintMonitor::objectModelTable[] =
 	{ "layerTime",			OBJECT_MODEL_FUNC_IF(self->IsPrinting() && self->currentLayer != 0, self->GetCurrentLayerTime(), 1), 				ObjectModelEntryFlags::live },
 	{ "pauseDuration",		OBJECT_MODEL_FUNC_IF(self->IsPrinting(), lrintf(self->GetPauseDuration())),											ObjectModelEntryFlags::live },
 	{ "rawExtrusion",		OBJECT_MODEL_FUNC_IF(self->IsPrinting(), ExpressionValue(self->gCodes.GetTotalRawExtrusion(), 1)),					ObjectModelEntryFlags::live },
-	{ "timesLeft",			OBJECT_MODEL_FUNC(self, 3),							 																ObjectModelEntryFlags::live },
+	{ "timesLeft",			OBJECT_MODEL_FUNC(self, 2),							 																ObjectModelEntryFlags::live },
 	{ "warmUpDuration",		OBJECT_MODEL_FUNC_IF(self->IsPrinting(), lrintf(self->GetWarmUpDuration())),										ObjectModelEntryFlags::live },
 
 	// 1. ParsedFileInfo members
 	{ "filament",			OBJECT_MODEL_FUNC_NOSELF(&filamentArrayDescriptor),							 										ObjectModelEntryFlags::none },
 	{ "fileName",			OBJECT_MODEL_FUNC_IF(self->IsPrinting(), self->filenameBeingPrinted.c_str()),										ObjectModelEntryFlags::none },
+	{ "firstLayerHeight",	OBJECT_MODEL_FUNC(self->printingFileInfo.firstLayerHeight, 2), 														ObjectModelEntryFlags::none },
 	{ "generatedBy",		OBJECT_MODEL_FUNC_IF(!self->printingFileInfo.generatedBy.IsEmpty(), self->printingFileInfo.generatedBy.c_str()),	ObjectModelEntryFlags::none },
 	{ "height",				OBJECT_MODEL_FUNC(self->printingFileInfo.objectHeight, 2), 															ObjectModelEntryFlags::none },
 	{ "lastModified",		OBJECT_MODEL_FUNC(DateTime(self->printingFileInfo.lastModifiedTime)), 												ObjectModelEntryFlags::none },
 	{ "layerHeight",		OBJECT_MODEL_FUNC(self->printingFileInfo.layerHeight, 2), 															ObjectModelEntryFlags::none },
-	{ "numLayers",			OBJECT_MODEL_FUNC((uint32_t)self->printingFileInfo.numLayers), 														ObjectModelEntryFlags::none },
+	{ "numLayers",			OBJECT_MODEL_FUNC((int32_t)self->printingFileInfo.GetNumLayers()), 													ObjectModelEntryFlags::none },
 	{ "printTime",			OBJECT_MODEL_FUNC_IF(self->printingFileInfo.printTime != 0, (int32_t)self->printingFileInfo.printTime), 			ObjectModelEntryFlags::none },
 	{ "simulatedTime",		OBJECT_MODEL_FUNC_IF(self->printingFileInfo.simulatedTime != 0, (int32_t)self->printingFileInfo.simulatedTime), 	ObjectModelEntryFlags::none },
-	{ "size",				OBJECT_MODEL_FUNC(self->printingFileInfo.fileSize),																	ObjectModelEntryFlags::none },
-	{ "thumbnails",			OBJECT_MODEL_FUNC_NOSELF(&thumbnailArrayDescriptor),																ObjectModelEntryFlags::none },
+	{ "size",				OBJECT_MODEL_FUNC((uint64_t)self->printingFileInfo.fileSize),														ObjectModelEntryFlags::none },
 
-	// 2. ParsedFileInfo.thumbnails[] members
-	{ "format",				OBJECT_MODEL_FUNC(self->printingFileInfo.thumbnails[context.GetLastIndex()].format.ToString()),						ObjectModelEntryFlags::none },
-	{ "height",				OBJECT_MODEL_FUNC((int32_t)self->printingFileInfo.thumbnails[context.GetLastIndex()].height),						ObjectModelEntryFlags::none },
-	{ "offset",				OBJECT_MODEL_FUNC(self->printingFileInfo.thumbnails[context.GetLastIndex()].offset),								ObjectModelEntryFlags::none },
-	{ "size",				OBJECT_MODEL_FUNC(self->printingFileInfo.thumbnails[context.GetLastIndex()].size),									ObjectModelEntryFlags::none },
-	{ "width",				OBJECT_MODEL_FUNC((int32_t)self->printingFileInfo.thumbnails[context.GetLastIndex()].width),						ObjectModelEntryFlags::none },
-
-	// 3. TimesLeft members
+	// 2. TimesLeft members
 	{ "filament",			OBJECT_MODEL_FUNC(self->EstimateTimeLeftAsExpression(filamentBased)),												ObjectModelEntryFlags::live },
 	{ "file",				OBJECT_MODEL_FUNC(self->EstimateTimeLeftAsExpression(fileBased)),													ObjectModelEntryFlags::live },
 	{ "layer", 				OBJECT_MODEL_FUNC_NOSELF(nullptr), 																					ObjectModelEntryFlags::obsolete },
 	{ "slicer",				OBJECT_MODEL_FUNC(self->EstimateTimeLeftAsExpression(slicerBased)),													ObjectModelEntryFlags::live },
 };
 
-constexpr uint8_t PrintMonitor::objectModelTableDescriptor[] = { 4, 12 + TRACK_OBJECT_NAMES, 11, 5, 4 };
+constexpr uint8_t PrintMonitor::objectModelTableDescriptor[] = { 3, 12 + TRACK_OBJECT_NAMES, 11, 4 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(PrintMonitor)
 
@@ -203,8 +181,8 @@ void PrintMonitor::SetSlicerTimeLeft(float seconds) noexcept
 
 void PrintMonitor::Spin() noexcept
 {
-#if HAS_SBC_INTERFACE
-	if (reprap.UsingSbcInterface())
+#if HAS_LINUX_INTERFACE
+	if (reprap.UsingLinuxInterface())
 	{
 		if (!printingFileParsed)
 		{
@@ -214,7 +192,7 @@ void PrintMonitor::Spin() noexcept
 	else
 #endif
 	{
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 		// File information about the file being printed must be available before layer estimations can be made
 		if (!filenameBeingPrinted.IsEmpty() && !printingFileParsed)
 		{
@@ -313,14 +291,14 @@ float PrintMonitor::GetPauseDuration() const noexcept
 // Notifies this class that a file has been set for printing
 void PrintMonitor::StartingPrint(const char* filename) noexcept
 {
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	WriteLocker locker(printMonitorLock);
-	MassStorage::CombineName(filenameBeingPrinted.GetRef(), Platform::GetGCodeDir(), filename);
-# if HAS_SBC_INTERFACE
-	if (!reprap.UsingSbcInterface())
+	MassStorage::CombineName(filenameBeingPrinted.GetRef(), platform.GetGCodeDir(), filename);
+	printingFileParsed = false;
+# if HAS_LINUX_INTERFACE
+	if (!reprap.UsingLinuxInterface())
 # endif
 	{
-		printingFileParsed = false;
 		if (MassStorage::GetFileInfo(filenameBeingPrinted.c_str(), printingFileInfo, false) != GCodeResult::notFinished)
 		{
 			UpdatePrintingFileInfo();
@@ -393,7 +371,7 @@ float PrintMonitor::EstimateTimeLeft(PrintEstimationMethod method) const noexcep
 	ReadLocker locker(printMonitorLock);
 
 	// We can't provide an estimation if we don't have any information about the file
-	if (!printingFileParsed || !isPrinting)
+	if (!printingFileParsed)
 	{
 		return 0.0;
 	}

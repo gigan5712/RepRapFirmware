@@ -34,7 +34,7 @@ constexpr ObjectModelArrayDescriptor CoreKinematics::inverseMatrixElementArrayDe
 	nullptr,					// no lock needed
 	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t { return reprap.GetGCodes().GetVisibleAxes(); },
 	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue
-							{ return ExpressionValue(((const CoreKinematics*)self)->inverseMatrix(context.GetIndex(1), context.GetIndex(0)), 3); }
+							{ return ExpressionValue(((const CoreKinematics*)self)->forwardMatrix(context.GetIndex(1), context.GetIndex(0)), 3); }
 };
 
 constexpr ObjectModelArrayDescriptor CoreKinematics::forwardMatrixArrayDescriptor =
@@ -310,8 +310,7 @@ bool CoreKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, const String
 	}
 	else if (!seenSeg)
 	{
-		Kinematics::Configure(mCode, gb, reply, error);
-		reply.catf(", %smatrix:", ((modified) ? "modified " : ""));
+		reply.printf("Kinematics is %s%s, matrix:", ((modified) ? "modified " : ""), GetName(false));
 		const size_t numVisibleAxes = reprap.GetGCodes().GetVisibleAxes();
 		const size_t numTotalAxes = reprap.GetGCodes().GetTotalAxes();
 		for (size_t axis = 0; axis < numVisibleAxes; ++axis)

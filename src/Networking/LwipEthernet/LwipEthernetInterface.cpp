@@ -9,9 +9,6 @@
 #define NO_STATUS_CODES
 
 #include "LwipEthernetInterface.h"
-
-#if HAS_LWIP_NETWORKING
-
 #include <Networking/NetworkBuffer.h>
 #include "LwipSocket.h"
 
@@ -353,7 +350,7 @@ void LwipEthernetInterface::Start() noexcept
 		const char *hostname = reprap.GetNetwork().GetHostname();
 
 		// Allow the MAC address to be set only before LwIP is started...
-		ethernet_configure_interface(macAddress.bytes, hostname);
+		ethernet_configure_interface(platform.GetDefaultMacAddress().bytes, hostname);
 		init_ethernet(DefaultIpAddress, DefaultNetMask, DefaultGateway);
 
 		// Initialise mDNS subsystem
@@ -700,7 +697,5 @@ void LwipEthernetInterface::RebuildMdnsServices() noexcept
 
 	mdns_resp_netif_settings_changed(&gs_net_if);
 }
-
-#endif	// HAS_LWIP_NETWORKING
 
 // End

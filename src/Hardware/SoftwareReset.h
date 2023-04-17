@@ -10,6 +10,10 @@
 
 #include <RepRapFirmware.h>
 
+#if SAM3XA
+# include <DueFlashStorage.h>
+#endif
+
 // Enumeration describing the reasons for a software reset.
 // The spin state gets or'ed into this, so keep the lower 5 bits unused.
 // IMPORTANT! When changing this, also update table SoftwareResetReasonText
@@ -68,7 +72,7 @@ struct SoftwareResetData
 	bool IsValid() const noexcept { return magic == magicValue; }
 	void Clear() noexcept;
 	void Populate(uint16_t reason, const uint32_t *stk) noexcept;
-	void Printit(MessageType mtype, unsigned int slot) const noexcept;
+	void Print(MessageType mtype, unsigned int slot) const noexcept;
 
 	static constexpr uint16_t versionValue = 9;		// increment this whenever this struct changes
 	static constexpr uint16_t magicValue = 0x7D00 | versionValue;	// value we use to recognise that all the flash data has been written

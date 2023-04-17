@@ -9,9 +9,6 @@
 #define LINEARDELTAKINEMATICS_H_
 
 #include "RepRapFirmware.h"
-
-#if SUPPORT_LINEAR_DELTA
-
 #include "RoundBedKinematics.h"
 
 // Class to hold the parameter for a delta machine.
@@ -30,7 +27,7 @@ public:
 	bool DoAutoCalibration(size_t numFactors, const RandomProbePointSet& probePoints, const StringRef& reply) noexcept override;
 	void SetCalibrationDefaults() noexcept override { Init(); }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteCalibrationParameters(FileStore *f) const noexcept override;
 #endif
 
@@ -39,6 +36,7 @@ public:
 	void GetAssumedInitialPosition(size_t numAxes, float positions[]) const noexcept override;
 	AxesBitmap AxesToHomeBeforeProbing() const noexcept override { return XyzAxes; }
 	MotionType GetMotionType(size_t axis) const noexcept override;
+	size_t NumHomingButtons(size_t numVisibleAxes) const noexcept override { return 0; }
 	HomingMode GetHomingMode() const noexcept override { return HomingMode::homeIndividualMotors; }
 	AxesBitmap AxesAssumedHomed(AxesBitmap g92Axes) const noexcept override;
 	AxesBitmap MustBeHomedAxes(AxesBitmap axesMoving, bool disallowMovesBeforeHoming) const noexcept override;
@@ -46,7 +44,7 @@ public:
 	bool QueryTerminateHomingMove(size_t axis) const noexcept override;
 	void OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const noexcept override;
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteResumeSettings(FileStore *f) const noexcept override;
 #endif
 
@@ -108,7 +106,5 @@ private:
 
 	bool doneAutoCalibration;							// True if we have done auto calibration
 };
-
-#endif	// SUPPORT_LINEAR_DELTA
 
 #endif /* LINEARDELTAKINEMATICS_H_ */

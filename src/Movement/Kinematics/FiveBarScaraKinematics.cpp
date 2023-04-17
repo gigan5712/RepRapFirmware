@@ -8,9 +8,6 @@
  */
 
 #include "FiveBarScaraKinematics.h"
-
-#if SUPPORT_FIVEBARSCARA
-
 #include <Platform/RepRap.h>
 #include <Platform/Platform.h>
 #include <Storage/MassStorage.h>
@@ -712,8 +709,7 @@ bool FiveBarScaraKinematics::Configure(unsigned int mCode, GCodeBuffer& gb, cons
 		else if (!seenNonGeometry && !gb.Seen('K'))
 		{
 			//TODO print all the parameters here
-			Kinematics::Configure(mCode, gb, reply, error);
-			reply.catf(", documented in https://duet3d.dozuki.com/Guide/Five+Bar+Parallel+SCARA/24?lang=en");
+			reply.printf("Kinematics is FiveBarScara, documented in https://duet3d.dozuki.com/Guide/Five+Bar+Parallel+SCARA/24?lang=en");
 		}
 
 		return seen;
@@ -827,7 +823,7 @@ void FiveBarScaraKinematics::MotorStepsToCartesian(const int32_t motorPos[], con
 }
 
 // Return true if the specified XY position is reachable by the print head reference point.
-bool FiveBarScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes) const noexcept
+bool FiveBarScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap axes, bool isCoordinated) const noexcept
 {
 	if (axes.IsBitSet(X_AXIS) && axes.IsBitSet(Y_AXIS))
 	{
@@ -839,7 +835,7 @@ bool FiveBarScaraKinematics::IsReachable(float axesCoords[MaxAxes], AxesBitmap a
 	}
 	axes.ClearBit(X_AXIS);
 	axes.ClearBit(Y_AXIS);
-	return Kinematics::IsReachable(axesCoords, axes);
+	return Kinematics::IsReachable(axesCoords, axes, isCoordinated);
 }
 
 // Return the initial Cartesian coordinates we assume after switching to this kinematics
@@ -925,6 +921,22 @@ void FiveBarScaraKinematics::OnHomingSwitchTriggered(size_t axis, bool highEnd, 
 	}
 }
 
+// Limit the speed and acceleration of a move to values that the mechanics can handle. The speeds in Cartesian space have already been limited.
+void FiveBarScaraKinematics::LimitSpeedAndAcceleration(DDA& dda, const float *normalisedDirectionVector, size_t numVisibleAxes, bool continuousRotationShortcut) const noexcept
+{
+	//TODO should we make use of numVisibleAxes and/or continuousRotationShortcut?
+	// For now we limit the speed in the XY plane to the lower of the X and Y maximum speeds, and similarly for the acceleration.
+	// Limiting the angular rates of the arms would be better.
+	const float xyFactor = fastSqrtf(fsquare(normalisedDirectionVector[X_AXIS]) + fsquare(normalisedDirectionVector[Y_AXIS]));
+	if (xyFactor > 0.01)
+	{
+		const Platform& platform = reprap.GetPlatform();
+		const float maxSpeed = min<float>(platform.MaxFeedrate(X_AXIS), platform.MaxFeedrate(Y_AXIS));
+		const float maxAcceleration = min<float>(platform.Acceleration(X_AXIS), platform.Acceleration(Y_AXIS));
+		dda.LimitSpeedAndAcceleration(maxSpeed/xyFactor, maxAcceleration/xyFactor);
+	}
+}
+
 // Return true if the specified axis is a continuous rotation axis
 bool FiveBarScaraKinematics::IsContinuousRotationAxis(size_t axis) const noexcept
 {
@@ -950,7 +962,5 @@ void FiveBarScaraKinematics::Recalc() noexcept
 	cachedY0 = std::numeric_limits<float>::quiet_NaN(); // make sure that the cached values won't match any coordinates
 	cachedInvalid = true;
 }
-
-#endif // SUPPORT_FIVEBARSCARA
 
 // End

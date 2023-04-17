@@ -451,7 +451,7 @@ bool HttpResponder::CharFromClient(char c) noexcept
 // 'value' is null-terminated, but we also pass its length in case it contains embedded nulls, which matters when uploading files.
 // Return true if we generated a json response to send, false if we didn't and changed the state instead.
 // This may also return true with response == nullptr if we tried to generate a response but ran out of buffers.
-bool HttpResponder::GetJsonResponse(const char *_ecv_array request, OutputBuffer *&response, bool& keepOpen) noexcept
+bool HttpResponder::GetJsonResponse(const char* request, OutputBuffer *&response, bool& keepOpen) noexcept
 {
 	keepOpen = false;	// assume we don't want to persist the connection
 	const char *parameter;
@@ -558,7 +558,7 @@ bool HttpResponder::GetJsonResponse(const char *_ecv_array request, OutputBuffer
 		const char* dir = GetKeyValue("dir");
 		if (dir == nullptr)
 		{
-			dir = Platform::GetGCodeDir();
+			dir = GetPlatform().GetGCodeDir();
 		}
 		const char* const firstVal = GetKeyValue("first");
 		const unsigned int startAt = (firstVal == nullptr) ? 0 : StrToU32(firstVal);
@@ -588,21 +588,6 @@ bool HttpResponder::GetJsonResponse(const char *_ecv_array request, OutputBuffer
 		}
 		response->printf("{\"err\":%d}", (success) ? 0 : 1);
 	}
-	else if (StringEqualsIgnoreCase(request, "thumbnail"))
-	{
-		const char* const nameVal = GetKeyValue("name");
-		const char* const offsetVal = GetKeyValue("offset");
-		FilePosition offset;
-		if (nameVal != nullptr && offsetVal != nullptr && (offset = StrToU32(offsetVal)) != 0)
-		{
-			OutputBuffer::ReleaseAll(response);
-			response = reprap.GetThumbnailResponse(nameVal, offset, false);
-		}
-		else
-		{
-			response->copy("{\"err\":1}");
-		}
-	}
 #else
 	else if (	StringEqualsIgnoreCase(request, "upload")
 			 || StringEqualsIgnoreCase(request, "delete")
@@ -610,7 +595,6 @@ bool HttpResponder::GetJsonResponse(const char *_ecv_array request, OutputBuffer
 			 || StringEqualsIgnoreCase(request, "files")
 			 || StringEqualsIgnoreCase(request, "move")
 			 || StringEqualsIgnoreCase(request, "mkdir")
-			 || StringEqualsIgnoreCase(request, "thumbnail")
 			)
 	{
 		response->copy("{err:1}");
@@ -638,7 +622,7 @@ bool HttpResponder::GetJsonResponse(const char *_ecv_array request, OutputBuffer
 		OutputBuffer::ReleaseAll(response);
 		const char *const filterVal = GetKeyValue("key");
 		const char *const flagsVal = GetKeyValue("flags");
-		response = reprap.GetModelResponse(nullptr, filterVal, flagsVal);
+		response = reprap.GetModelResponse(filterVal, flagsVal);
 	}
 #endif
 	else if (StringEqualsIgnoreCase(request, "config"))
@@ -768,7 +752,7 @@ bool HttpResponder::RemoveAuthentication() noexcept
 	}
 }
 
-void HttpResponder::SendFile(const char *_ecv_array nameOfFileToSend, bool isWebFile) noexcept
+void HttpResponder::SendFile(const char* nameOfFileToSend, bool isWebFile) noexcept
 {
 #if HAS_MASS_STORAGE
 	FileStore *fileToSend = nullptr;
@@ -787,21 +771,29 @@ void HttpResponder::SendFile(const char *_ecv_array nameOfFileToSend, bool isWeb
 			nameOfFileToSend = INDEX_PAGE_FILE;
 		}
 
-		// Check that the length of the filename requested is short enough for CombineName not to generate an error message before we try to open it.
-		// We used to report a possible virus attack in this case, but that sometimes leads to false warnings because of OCSP requests from AV programs,
-		// or file download requests after IP address changes
-		if (strlen(nameOfFileToSend) <= MaxExpectedWebDirFilenameLength)
+		if (strlen(nameOfFileToSend) > MaxExpectedWebDirFilenameLength)
+		{
+			// We have been asked for a file with a very long name. Don't try to open it, because that may lead to MassStorage::CombineName generating an error message.
+			// Instead, report a possible virus attack from the sending IP address.
+			// Exception: it if is an OCSP request, just return 404.
+			if (!StringStartsWith(nameOfFileToSend, "/ocsp"))
+			{
+				GetPlatform().MessageF(WarningMessage,
+										"IP %s requested file '%.20s...' from HTTP server, possibly a virus attack\n",
+										IP4String(GetRemoteIP()).c_str(), nameOfFileToSend);
+			}
+		}
+		else
 		{
 			for (;;)
 			{
 				// Try to open a gzipped version of the file first
-				if (!StringEndsWithIgnoreCase(nameOfFileToSend, ".gz"))
+				if (!StringEndsWithIgnoreCase(nameOfFileToSend, ".gz") && strlen(nameOfFileToSend) + 3 <= MaxFilenameLength)
 				{
-					static_assert(MaxExpectedWebDirFilenameLength + 3 <= MaxFilenameLength);			// this ensures that we can append '.gz' to the filename without overflow
 					String<MaxFilenameLength> nameBuf;
 					nameBuf.copy(nameOfFileToSend);
 					nameBuf.cat(".gz");
-					fileToSend = GetPlatform().OpenFile(Platform::GetWebDir(), nameBuf.c_str(), OpenMode::read);
+					fileToSend = GetPlatform().OpenFile(GetPlatform().GetWebDir(), nameBuf.c_str(), OpenMode::read);
 					if (fileToSend != nullptr)
 					{
 						zip = true;
@@ -810,7 +802,7 @@ void HttpResponder::SendFile(const char *_ecv_array nameOfFileToSend, bool isWeb
 				}
 
 				// That failed, so try to open the normal version of the file
-				fileToSend = GetPlatform().OpenFile(Platform::GetWebDir(), nameOfFileToSend, OpenMode::read);
+				fileToSend = GetPlatform().OpenFile(GetPlatform().GetWebDir(), nameOfFileToSend, OpenMode::read);
 				if (fileToSend != nullptr)
 				{
 					break;
@@ -835,7 +827,7 @@ void HttpResponder::SendFile(const char *_ecv_array nameOfFileToSend, bool isWeb
 		if (fileToSend == nullptr && (StringEndsWithIgnoreCase(nameOfFileToSend, ".html") || StringEndsWithIgnoreCase(nameOfFileToSend, ".htm")))
 		{
 			nameOfFileToSend = FOUR04_PAGE_FILE;
-			fileToSend = GetPlatform().OpenFile(Platform::GetWebDir(), nameOfFileToSend, OpenMode::read);
+			fileToSend = GetPlatform().OpenFile(GetPlatform().GetWebDir(), nameOfFileToSend, OpenMode::read);
 		}
 
 		if (fileToSend == nullptr)
@@ -967,7 +959,7 @@ void HttpResponder::SendGCodeReply() noexcept
 }
 
 // Send a JSON response to the current command. outBuf is non-null on entry.
-void HttpResponder::SendJsonResponse(const char *_ecv_array command) noexcept
+void HttpResponder::SendJsonResponse(const char* command) noexcept
 {
 	// Try to authorise the user automatically to retain compatibility with the old web interface
 	if (!CheckAuthenticated() && reprap.NoPasswordSet())
@@ -1264,7 +1256,7 @@ void HttpResponder::ProcessRequest() noexcept
 }
 
 // Reject the current message
-void HttpResponder::RejectMessage(const char *_ecv_array response, unsigned int code) noexcept
+void HttpResponder::RejectMessage(const char* response, unsigned int code) noexcept
 {
 	if (reprap.Debug(moduleWebserver))
 	{
@@ -1296,20 +1288,22 @@ void HttpResponder::DoUpload() noexcept
 	size_t len;
 	if (skt->ReadBuffer(buffer, len))
 	{
-		(void)CheckAuthenticated();							// uploading may take a long time, so make sure the requester IP is not timed out
-		timer = millis();									// reset the timer
-
-		const bool ok = dummyUpload || fileBeingUploaded.Write(buffer, len);
 		skt->Taken(len);
 		uploadedBytes += len;
 
-		if (!ok)
+		(void)CheckAuthenticated();							// uploading may take a long time, so make sure the requester IP is not timed out
+		timer = millis();									// reset the timer
+
+		if (!dummyUpload)
 		{
-			uploadError = true;
-			GetPlatform().Message(ErrorMessage, "HTTP: could not write upload data\n");
-			CancelUpload();
-			SendJsonResponse("upload");
-			return;
+			if (!fileBeingUploaded.Write(buffer, len))
+			{
+				uploadError = true;
+				GetPlatform().Message(ErrorMessage, "HTTP: could not write upload data\n");
+				CancelUpload();
+				SendJsonResponse("upload");
+				return;
+			}
 		}
 	}
 	else if (!skt->CanRead() || millis() - timer >= HttpSessionTimeout)
@@ -1399,7 +1393,7 @@ void HttpResponder::Diagnostics(MessageType mt) const noexcept
 }
 
 // This is called from the GCodes task to store a response, which is picked up by the Network task
-/*static*/ void HttpResponder::HandleGCodeReply(const char *_ecv_array reply) noexcept
+/*static*/ void HttpResponder::HandleGCodeReply(const char *reply) noexcept
 {
 	if (numSessions > 0)
 	{

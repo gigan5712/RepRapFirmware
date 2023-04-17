@@ -74,8 +74,9 @@ EndstopHitDetails StallDetectionEndstop::CheckTriggered() noexcept
 			rslt.SetAction(EndstopHitAction::stopDriver);
 #if SUPPORT_CAN_EXPANSION
 			rslt.driver.boardAddress = 0;
-#endif
+#else
 			rslt.driver.localDriver = relevantStalledDrivers.LowestSetBit();
+#endif
 		}
 		else
 		{

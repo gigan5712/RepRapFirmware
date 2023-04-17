@@ -16,7 +16,6 @@
 #include <CanId.h>
 #include <CanMessageBuffer.h>
 #include <General/NamedEnum.h>
-#include <Platform/UniqueId.h>
 
 NamedEnum(BoardState, uint8_t, unknown, flashing, flashFailed, resetting, running);
 
@@ -24,19 +23,8 @@ struct ExpansionBoardData
 {
 	ExpansionBoardData() noexcept;
 
-	const char *_ecv_array typeName;
-	MinCurMax mcuTemp, vin, v12;
-	uint32_t accelerometerLastRunDataPoints;
-	uint32_t closedLoopLastRunDataPoints;
-	UniqueId uniqueId;
-	uint16_t accelerometerRuns;
-	uint16_t closedLoopRuns;
-	uint16_t hasMcuTemp : 1,
-			 hasVin : 1,
-			 hasV12 : 1,
-			 hasAccelerometer : 1,
-			 hasClosedLoop : 1,
-			 spare : 11;
+	const char *typeName;
+	MinMaxCurrent mcuTemp, vin, v12;
 	BoardState state;
 	uint8_t numDrivers;
 };
@@ -47,10 +35,8 @@ public:
 	ExpansionManager() noexcept;
 
 	unsigned int GetNumExpansionBoards() const noexcept { return numExpansionBoards; }
+	void ProcessAnnouncement(CanMessageBuffer *buf) noexcept;
 	const ExpansionBoardData *GetBoardDetails(uint8_t address) const noexcept;
-
-	void ProcessAnnouncement(CanMessageBuffer *buf, bool isNewFormat) noexcept;
-	void ProcessBoardStatusReport(const CanMessageBuffer *buf) noexcept;
 
 	// Firmware update and related functions
 	GCodeResult ResetRemote(uint32_t boardAddress, GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
@@ -58,17 +44,15 @@ public:
 
 	void UpdateFinished(CanAddress address) noexcept;
 	void UpdateFailed(CanAddress address) noexcept;
-	void AddAccelerometerRun(CanAddress address, unsigned int numDataPoints) noexcept;
-	void AddClosedLoopRun(CanAddress address, unsigned int numDataPoints) noexcept;
 	bool IsFlashing() const noexcept { return numBoardsFlashing != 0; }
 
 	void EmergencyStop() noexcept;
 
+	const ExpansionBoardData& FindIndexedBoard(unsigned int index) const noexcept;
 protected:
 	DECLARE_OBJECT_MODEL
 
 private:
-	const ExpansionBoardData& FindIndexedBoard(unsigned int index) const noexcept;
 	void UpdateBoardState(CanAddress address, BoardState newState) noexcept;
 
 	unsigned int numExpansionBoards;

@@ -10,8 +10,6 @@
 
 #include "RoundBedKinematics.h"
 
-#if SUPPORT_ROTARY_DELTA
-
 class RotaryDeltaKinematics : public RoundBedKinematics
 {
 public:
@@ -26,19 +24,20 @@ public:
 	bool SupportsAutoCalibration() const noexcept override { return true; }
 	bool DoAutoCalibration(size_t numFactors, const RandomProbePointSet& probePoints, const StringRef& reply) noexcept override;
 	void SetCalibrationDefaults() noexcept override { Init(); }
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteCalibrationParameters(FileStore *f) const noexcept override;
 #endif
 	LimitPositionResult LimitPosition(float finalCoords[], const float * null initialCoords, size_t numVisibleAxes, AxesBitmap axesToLimit, bool isCoordinated, bool applyM208Limits) const noexcept override;
 	void GetAssumedInitialPosition(size_t numAxes, float positions[]) const noexcept override;
 	AxesBitmap AxesToHomeBeforeProbing() const noexcept override { return XyzAxes; }
+	size_t NumHomingButtons(size_t numVisibleAxes) const noexcept override { return 0; }
 	HomingMode GetHomingMode() const noexcept override { return HomingMode::homeIndividualMotors; }
 	AxesBitmap AxesAssumedHomed(AxesBitmap g92Axes) const noexcept override;
 	AxesBitmap MustBeHomedAxes(AxesBitmap axesMoving, bool disallowMovesBeforeHoming) const noexcept override;
 	AxesBitmap GetHomingFileName(AxesBitmap toBeHomed, AxesBitmap alreadyHomed, size_t numVisibleAxes, const StringRef& filename) const noexcept override;
 	bool QueryTerminateHomingMove(size_t axis) const noexcept override;
 	void OnHomingSwitchTriggered(size_t axis, bool highEnd, const float stepsPerMm[], DDA& dda) const noexcept override;
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteResumeSettings(FileStore *f) const noexcept override;
 #endif
 
@@ -93,7 +92,5 @@ private:
 
 	bool doneAutoCalibration;							// True if we have done auto calibration
 };
-
-#endif // SUPPORT_ROTARY_DELTA
 
 #endif /* SRC_MOVEMENT_KINEMATICS_ROTARYDELTAKINEMATICS_H_ */

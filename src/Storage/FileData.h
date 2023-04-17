@@ -10,7 +10,7 @@
 
 #include "FileStore.h"
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 class FileGCodeInput;
 
@@ -19,27 +19,18 @@ class FileGCodeInput;
 class FileData
 {
 public:
-	FileData() noexcept : f(nullptr) {}
+	friend class FileGCodeInput;
 
-	~FileData() { (void)Close(); }
+	FileData() noexcept : f(nullptr) {}
 
 	FileData(const FileData& other) noexcept
 	{
 		f = other.f;
 		if (f != nullptr)
 		{
-			not_null(f)->Duplicate();
+			f->Duplicate();
 		}
 	}
-
-	FileData(FileData&& other) noexcept
-	{
-		f = other.f;
-		other.f = nullptr;
-	}
-
-	// Make sure we don't assign these objects
-	FileData& operator=(const FileData&) = delete;
 
 	// Set this to refer to a newly-opened file
 	void Set(FileStore* pfile) noexcept
@@ -50,21 +41,11 @@ public:
 
 	bool IsLive() const noexcept { return f != nullptr; }
 
-	bool operator==(const FileData& other) const noexcept
-	{
-		return f == other.f;
-	}
-
-	bool operator!=(const FileData& other) const noexcept
-	{
-		return f != other.f;
-	}
-
 	bool Close() noexcept
 	{
 		if (f != nullptr)
 		{
-			bool ok = not_null(f)->Close();
+			bool ok = f->Close();
 			f = nullptr;
 			return ok;
 		}
@@ -72,72 +53,59 @@ public:
 	}
 
 	bool Read(char& b) noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Read(b);
+		return f->Read(b);
 	}
 
-	int Read(char *_ecv_array buf, size_t nBytes) noexcept
-	pre(IsLive())
+	int Read(char *buf, size_t nBytes) noexcept
 	{
-		return not_null(f)->Read(buf, nBytes);
+		return f->Read(buf, nBytes);
 	}
 
-# if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
 	bool Write(char b) noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Write(b);
+		return f->Write(b);
 	}
 
-	bool Write(const char *_ecv_array s) noexcept
-	pre(IsLive())
+	bool Write(const char *s) noexcept
 	{
-		return not_null(f)->Write(s, strlen(s));
+		return f->Write(s, strlen(s));
 	}
 
-	bool Write(const char *_ecv_array s, size_t len) noexcept
-	pre(IsLive())
+	bool Write(const char *s, size_t len) noexcept
 	{
-		return not_null(f)->Write(s, len);
+		return f->Write(s, len);
 	}
 
-	bool Write(const uint8_t *_ecv_array s, size_t len) noexcept
-	pre(IsLive())
+	bool Write(const uint8_t *s, size_t len) noexcept
 	{
-		return not_null(f)->Write(s, len);
+		return f->Write(s, len);
 	}
 
 	// This returns the CRC32 of data written to a newly-created file. It does not calculate the CRC of an existing file.
 	uint32_t GetCrc32() const noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->GetCRC32();
+		return f->GetCRC32();
 	}
 
 	bool Flush() noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Flush();
+		return f->Flush();
 	}
-# endif
 
 	FilePosition GetPosition() const noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Position();
+		return f->Position();
 	}
 
 	bool Seek(FilePosition position) noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Seek(position);
+		return f->Seek(position);
 	}
 
 	FilePosition Length() const noexcept
-	pre(IsLive())
 	{
-		return not_null(f)->Length();
+		return f->Length();
 	}
 
 	// Move operator
@@ -148,24 +116,16 @@ public:
 		other.Init();
 	}
 
-	// Copy operator
-	void CopyFrom(const FileData& other) noexcept
-	{
-		Close();
-		f = other.f;
-		if (f != nullptr)
-		{
-			not_null(f)->Duplicate();
-		}
-	}
-
 private:
-	FileStore * null f;
+	FileStore *f;
 
 	void Init() noexcept
 	{
 		f = nullptr;
 	}
+
+	// Private assignment operator to prevent us assigning these objects
+	FileData& operator=(const FileData&) noexcept;
 };
 
 #endif

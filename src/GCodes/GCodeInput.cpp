@@ -221,7 +221,7 @@ void NetworkGCodeInput::Put(MessageType mtype, const char *buf) noexcept
 {
 	const size_t len = strlen(buf) + 1;
 	MutexLocker lock(bufMutex, 200);
-	if (lock.IsAcquired())
+	if (lock)
 	{
 		// Only cache this if we have enough space left
 		if (len <= BufferSpaceLeft())
@@ -243,24 +243,24 @@ NetworkGCodeInput::NetworkGCodeInput() noexcept : RegularGCodeInput()
 bool NetworkGCodeInput::FillBuffer(GCodeBuffer *gb) noexcept /*override*/
 {
 	MutexLocker lock(bufMutex, 10);
-	return lock.IsAcquired() && RegularGCodeInput::FillBuffer(gb);
+	return lock && RegularGCodeInput::FillBuffer(gb);
 }
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 // File-based G-code input source
 
 // Reset this input. Should be called when the associated file is being closed
 void FileGCodeInput::Reset() noexcept
 {
-	lastFileRead.Close();
+	lastFile = nullptr;
 	RegularGCodeInput::Reset();
 }
 
 // Reset this input. Should be called when a specific G-code or macro file is closed outside of the reading context
 void FileGCodeInput::Reset(const FileData &file) noexcept
 {
-	if (lastFileRead == file)
+	if (file.f == lastFile)
 	{
 		Reset();
 	}
@@ -272,18 +272,18 @@ GCodeInputReadResult FileGCodeInput::ReadFromFile(FileData &file) noexcept
 	const size_t bytesCached = BytesCached();
 
 	// Keep track of the last file we read from
-	if (lastFileRead.IsLive() && lastFileRead != file)
+	if (lastFile != nullptr && lastFile != file.f)
 	{
 		if (bytesCached > 0)
 		{
 			// Rewind back to the right position so we can resume at the right position later.
 			// This may be necessary when nested macros are executed.
-			lastFileRead.Seek(lastFileRead.GetPosition() - bytesCached);
+			lastFile->Seek(lastFile->Position() - bytesCached);
 		}
 
 		RegularGCodeInput::Reset();
 	}
-	lastFileRead.CopyFrom(file);
+	lastFile = file.f;
 
 	// Read more from the file
 	if (bytesCached < GCodeInputFileReadThreshold)

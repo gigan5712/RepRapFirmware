@@ -11,9 +11,10 @@
 
 #include "Lcd/ST7920/Lcd7920.h"
 #include "Lcd/ST7567/Lcd7567.h"
-#include <GCodes/GCodes.h>
-#include <GCodes/GCodeBuffer/GCodeBuffer.h>
-#include <Hardware/IoPorts.h>
+#include "GCodes/GCodes.h"
+#include "GCodes/GCodeBuffer/GCodeBuffer.h"
+#include "Hardware/IoPorts.h"
+#include "Pins.h"
 
 constexpr int DefaultPulsesPerClick = -4;			// values that work with displays I have are 2 and -4
 
@@ -194,9 +195,17 @@ GCodeResult Display::Configure(GCodeBuffer& gb, const StringRef& reply) THROWS(G
 	if (gb.Seen('P'))
 	{
 		// Delete any existing LCD, menu and encoder
-		DeleteObject(lcd);
-		DeleteObject(menu);
-		DeleteObject(encoder);
+		Lcd *tempLcd = nullptr;
+		std::swap(lcd, tempLcd);
+		delete tempLcd;
+
+		Menu *tempMenu = nullptr;
+		std::swap(menu, tempMenu);
+		delete tempMenu;
+
+		RotaryEncoder *tempEncoder = nullptr;
+		std::swap(encoder, tempEncoder);
+		delete tempEncoder;
 
 		seen = true;
 		switch (gb.GetUIValue())
@@ -237,11 +246,7 @@ GCodeResult Display::Configure(GCodeBuffer& gb, const StringRef& reply) THROWS(G
 		encoder->Init(gb.GetIValue());			// configure encoder pulses per click and direction
 	}
 
-	if (seen)
-	{
-		reprap.BoardsUpdated();
-	}
-	else
+	if (!seen)
 	{
 		if (lcd != nullptr)
 		{

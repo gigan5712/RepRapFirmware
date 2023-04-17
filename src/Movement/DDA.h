@@ -11,8 +11,6 @@
 #include <RepRapFirmware.h>
 #include "DriveMovement.h"
 #include "StepTimer.h"
-#include "MoveSegment.h"
-#include "InputShaperPlan.h"
 #include <Platform/Tasks.h>
 #include <GCodes/GCodes.h>			// for class RawMove
 
@@ -24,55 +22,10 @@
 
 class DDARing;
 
-// Struct for passing parameters to the DriveMovement Prepare methods, also accessed by the input shaper
-struct PrepParams
-{
-	struct PrepParamSet
-	{
-		float accelDistance;
-		float decelStartDistance;
-		float accelClocks, steadyClocks, decelClocks;
-		float acceleration, deceleration;
-
-		// Calculate the steady clocks and set the total clocks in the DDA
-		void Finalise(float topSpeed) noexcept;
-
-		// Get the total clocks needed
-		float TotalClocks() const noexcept { return accelClocks + steadyClocks + decelClocks; }
-	};
-
-	// Parameters used for all types of motion
-	PrepParamSet unshaped;
-	PrepParamSet shaped;								// only valid if the shaping plan is not empty
-	InputShaperPlan shapingPlan;
-
-#if SUPPORT_CAN_EXPANSION
-	// Parameters used by CAN expansion
-	float initialSpeedFraction, finalSpeedFraction;
-#endif
-
-#if SUPPORT_LINEAR_DELTA
-	// Parameters used only for delta moves
-	float initialX, initialY;
-# if SUPPORT_CAN_EXPANSION
-	float finalX, finalY;
-	float zMovement;
-# endif
-	const LinearDeltaKinematics *dparams;
-	float a2plusb2;								// sum of the squares of the X and Y movement fractions
-#endif
-
-	// Set up the parameters from the DDA, excluding steadyClocks because that may be affected by input shaping
-	void SetFromDDA(const DDA& dda) noexcept;
-};
-
 // This defines a single coordinated movement of one or several motors
 class DDA
 {
 	friend class DriveMovement;
-	friend class AxisShaper;
-	friend class ExtruderShaper;
-	friend class PrepParams;
 
 public:
 
@@ -100,14 +53,13 @@ public:
 
 	void Start(Platform& p, uint32_t tim) noexcept SPEED_CRITICAL;					// Start executing the DDA, i.e. move the move.
 	void StepDrivers(Platform& p, uint32_t now) noexcept SPEED_CRITICAL;			// Take one step of the DDA, called by timer interrupt.
-	void SimulateSteppingDrivers(Platform& p) noexcept;								// For debugging use
 	bool ScheduleNextStepInterrupt(StepTimer& timer) const noexcept SPEED_CRITICAL;	// Schedule the next interrupt, returning true if we can't because it is already due
 
 	void SetNext(DDA *n) noexcept { next = n; }
 	void SetPrevious(DDA *p) noexcept { prev = p; }
 	void Complete() noexcept { state = completed; }
 	bool Free() noexcept;
-	void Prepare(SimulationMode simMode) noexcept SPEED_CRITICAL;					// Calculate all the values and freeze this DDA
+	void Prepare(uint8_t simMode, float extrusionPending[]) noexcept SPEED_CRITICAL;	// Calculate all the values and freeze this DDA
 	bool HasStepError() const noexcept;
 	bool CanPauseAfter() const noexcept;
 	bool IsPrintingMove() const noexcept { return flags.isPrintingMove; }			// Return true if this involves both XY movement and extrusion
@@ -126,11 +78,7 @@ public:
 #endif
 
 #if SUPPORT_REMOTE_COMMANDS
-# if USE_REMOTE_INPUT_SHAPING
-	bool InitShapedFromRemote(const CanMessageMovementLinearShaped& msg) noexcept;
-# else
 	bool InitFromRemote(const CanMessageMovementLinear& msg) noexcept;
-# endif
 #endif
 
 	const int32_t *DriveCoordinates() const noexcept { return endPoint; }			// Get endpoints of a move in machine coordinates
@@ -140,11 +88,10 @@ public:
 	bool FetchEndPosition(volatile int32_t ep[MaxAxesPlusExtruders], volatile float endCoords[MaxAxesPlusExtruders]) noexcept;
 	void SetPositions(const float move[]) noexcept;									// Force the endpoints to be these
 	FilePosition GetFilePosition() const noexcept { return filePos; }
-	float GetRequestedSpeedMmPerClock() const noexcept { return requestedSpeed; }
-	float GetRequestedSpeedMmPerSec() const noexcept { return InverseConvertSpeedToMmPerSec(requestedSpeed); }
-	float GetTopSpeedMmPerSec() const noexcept { return InverseConvertSpeedToMmPerSec(topSpeed); }
-	float GetAccelerationMmPerSecSquared() const noexcept { return InverseConvertAcceleration(acceleration); }
-	float GetDecelerationMmPerSecSquared() const noexcept { return InverseConvertAcceleration(deceleration); }
+	float GetRequestedSpeed() const noexcept { return requestedSpeed; }
+	float GetTopSpeed() const noexcept { return topSpeed; }
+	float GetAcceleration() const noexcept { return acceleration; }
+	float GetDeceleration() const noexcept { return deceleration; }
 	float GetVirtualExtruderPosition() const noexcept { return virtualExtruderPosition; }
 	float AdvanceBabyStepping(DDARing& ring, size_t axis, float amount) noexcept;	// Try to push babystepping earlier in the move queue
 	const Tool *GetTool() const noexcept { return tool; }
@@ -163,7 +110,6 @@ public:
 	uint32_t GetClocksNeeded() const noexcept { return clocksNeeded; }
 	bool IsGoodToPrepare() const noexcept;
 	bool IsNonPrintingExtruderMove() const noexcept { return flags.isNonPrintingExtruderMove; }
-	void UpdateMovementAccumulators(volatile int32_t *accumulators) const noexcept;
 
 #if SUPPORT_LASER || SUPPORT_IOBITS
 	LaserPwmOrIoBits GetLaserPwmOrIoBits() const noexcept { return laserPwmOrIoBits; }
@@ -185,7 +131,6 @@ public:
 	uint32_t GetStepInterval(size_t axis, uint32_t microstepShift) const noexcept;	// Get the current full step interval for this axis or extruder
 #endif
 
-	DriveMovement *FindDM(size_t drive) const noexcept;								// find the DM for a drive if there is one even if it is completed
 	void CheckEndstops(Platform& platform) noexcept;
 
 	void DebugPrint(const char *tag) const noexcept;								// print the DDA only
@@ -201,25 +146,28 @@ public:
 	// Note: the above measurements were taken some time ago, before some firmware optimisations.
 #if SAME70
 	// Use the same defaults as for the SAM4E for now.
-	static constexpr uint32_t MinCalcInterval = (40 * StepClockRate)/1000000;				// same as delta for now, but could be lower
-	static constexpr uint32_t HiccupTime = (30 * StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
+	static constexpr uint32_t MinCalcIntervalDelta = (40 * StepTimer::StepClockRate)/1000000; 		// the smallest sensible interval between calculations (40us) in step timer clocks
+	static constexpr uint32_t MinCalcIntervalCartesian = (40 * StepTimer::StepClockRate)/1000000;	// same as delta for now, but could be lower
+	static constexpr uint32_t HiccupTime = (30 * StepTimer::StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
 #elif SAM4E || SAM4S || SAME5x
-	static constexpr uint32_t MinCalcIntervalDelta = (40 * StepClockRate)/1000000; 			// the smallest sensible interval between calculations (40us) in step timer clocks
-	static constexpr uint32_t MinCalcInterval = (40 * StepClockRate)/1000000;				// same as delta for now, but could be lower
-	static constexpr uint32_t HiccupTime = (30 * StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
+	static constexpr uint32_t MinCalcIntervalDelta = (40 * StepTimer::StepClockRate)/1000000; 		// the smallest sensible interval between calculations (40us) in step timer clocks
+	static constexpr uint32_t MinCalcIntervalCartesian = (40 * StepTimer::StepClockRate)/1000000;	// same as delta for now, but could be lower
+	static constexpr uint32_t HiccupTime = (30 * StepTimer::StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
 #elif defined(__LPC17xx__)
-     static constexpr uint32_t MinCalcInterval = (40 * StepClockRate)/1000000;				// same as delta for now, but could be lower
-	static constexpr uint32_t HiccupTime = (30 * StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
+    static constexpr uint32_t MinCalcIntervalDelta = (40 * StepTimer::StepClockRate)/1000000;		// the smallest sensible interval between calculations (40us) in step timer clocks
+    static constexpr uint32_t MinCalcIntervalCartesian = (40 * StepTimer::StepClockRate)/1000000;	// same as delta for now, but could be lower
+	static constexpr uint32_t HiccupTime = (30 * StepTimer::StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
 #else	// SAM3X
-	static constexpr uint32_t MinCalcInterval = (60 * StepClockRate)/1000000;				// same as delta for now, but could be lower
-	static constexpr uint32_t HiccupTime = (40 * StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
+	static constexpr uint32_t MinCalcIntervalDelta = (60 * StepTimer::StepClockRate)/1000000; 		// the smallest sensible interval between calculations (60us) in step timer clocks
+	static constexpr uint32_t MinCalcIntervalCartesian = (60 * StepTimer::StepClockRate)/1000000;	// same as delta for now, but could be lower
+	static constexpr uint32_t HiccupTime = (40 * StepTimer::StepClockRate)/1000000;					// how long we hiccup for in step timer clocks
 #endif
-	static constexpr uint32_t MaxStepInterruptTime = 10 * StepTimer::MinInterruptInterval;	// the maximum time we spend looping in the ISR , in step clocks
-	static constexpr uint32_t WakeupTime = (100 * StepClockRate)/1000000;					// stop resting 100us before the move is due to end
-	static constexpr uint32_t HiccupIncrement = HiccupTime/2;								// how much we increase the hiccup time by on each attempt
+	static constexpr uint32_t MaxStepInterruptTime = 10 * StepTimer::MinInterruptInterval;			// the maximum time we spend looping in the ISR , in step clocks
+	static constexpr uint32_t WakeupTime = (100 * StepTimer::StepClockRate)/1000000;				// stop resting 100us before the move is due to end
+	static constexpr uint32_t HiccupIncrement = HiccupTime/2;										// how much we increase the hiccup time by on each attempt
 
-	static constexpr uint32_t UsualMinimumPreparedTime = StepClockRate/10;					// 100ms
-	static constexpr uint32_t AbsoluteMinimumPreparedTime = StepClockRate/20;				// 50ms
+	static constexpr uint32_t UsualMinimumPreparedTime = StepTimer::StepClockRate/10;				// 100ms
+	static constexpr uint32_t AbsoluteMinimumPreparedTime = StepTimer::StepClockRate/20;			// 50ms
 
 #if DDA_LOG_PROBE_CHANGES
 	static const size_t MaxLoggedProbePositions = 40;
@@ -227,18 +175,15 @@ public:
 	static int32_t loggedProbePositions[XYZ_AXES * MaxLoggedProbePositions];
 #endif
 
-#ifdef DUET3_MB6XD
-	static volatile uint32_t lastStepHighTime;								// when we last started a step pulse
-#else
-	static volatile uint32_t lastStepLowTime;								// when we last completed a step pulse to a slow driver
-#endif
-	static volatile uint32_t lastDirChangeTime;								// when we last change the DIR signal to a slow driver
+	static uint32_t lastStepLowTime;										// when we last completed a step pulse to a slow driver
+	static uint32_t lastDirChangeTime;										// when we last change the DIR signal to a slow driver
 
 #if 0	// debug only
 	static uint32_t stepsRequested[NumDirectDrivers], stepsDone[NumDirectDrivers];
 #endif
 
 private:
+	DriveMovement *FindDM(size_t drive) const noexcept;						// find the DM for a drive if there is one even if it is completed
 	DriveMovement *FindActiveDM(size_t drive) const noexcept;				// find the DM for a drive if there is one but only if it is active
 	void RecalculateMove(DDARing& ring) noexcept SPEED_CRITICAL;
 	void MatchSpeeds() noexcept SPEED_CRITICAL;
@@ -248,8 +193,8 @@ private:
 	void ReleaseDMs() noexcept;
 	bool IsDecelerationMove() const noexcept;								// return true if this move is or have been might have been intended to be a deceleration-only move
 	bool IsAccelerationMove() const noexcept;								// return true if this move is or have been might have been intended to be an acceleration-only move
-	void EnsureUnshapedSegments(const PrepParams& params) noexcept;
 	void DebugPrintVector(const char *name, const float *vec, size_t len) const noexcept;
+	void AdjustAcceleration() noexcept;										// Adjust the acceleration and deceleration to reduce ringing
 
 #if SUPPORT_CAN_EXPANSION
 	int32_t PrepareRemoteExtruder(size_t drive, float& extrusionPending, float speedChange) const noexcept;
@@ -275,10 +220,8 @@ private:
 	{
 		struct
 		{
-			uint16_t endCoordinatesValid : 1,		// True if endCoordinates can be relied
-#if SUPPORT_LINEAR_DELTA
+			uint16_t endCoordinatesValid : 1,		// True if endCoordinates can be relied on
 					 isDeltaMovement : 1,			// True if this is a delta printer movement
-#endif
 					 canPauseAfter : 1,				// True if we can pause at the end of this move
 					 isPrintingMove : 1,			// True if this move includes XY movement and extrusion
 					 usePressureAdvance : 1,		// True if pressure advance should be applied to any forward extrusion
@@ -286,7 +229,7 @@ private:
 					 xyMoving : 1,					// True if movement along an X axis or the Y axis was requested, even it if's too small to do
 					 isLeadscrewAdjustmentMove : 1,	// True if this is a leadscrews adjustment move
 					 usingStandardFeedrate : 1,		// True if this move uses the standard feed rate
-					 isNonPrintingExtruderMove : 1,	// True if this move is an extruder-only move, or involves reverse extrusion (and possibly axis movement too)
+					 isNonPrintingExtruderMove : 1,	// True if this move is a fast extruder-only move, probably a retract/re-prime
 					 continuousRotationShortcut : 1, // True if continuous rotation axes take shortcuts
 					 checkEndstops : 1,				// True if this move monitors endstops or Z probe
 					 controlLaser : 1,				// True if this move controls the laser or iobits
@@ -338,15 +281,19 @@ private:
 		struct
 		{
 			// These are calculated from the above and used in the ISR, so they are set up by Prepare()
-			uint32_t moveStartTime;					// clock count at which the move is due to start (before execution) or was started (during execution)
+			uint32_t moveStartTime;				// clock count at which the move is due to start (before execution) or was started (during execution)
+			uint32_t startSpeedTimesCdivA;		// the number of clocks it would have taken to reach the start speed from rest
+			uint32_t topSpeedTimesCdivDPlusDecelStartClocks;
+			int32_t extraAccelerationClocks;	// the additional number of clocks needed because we started the move at less than topSpeed. Negative after ReduceHomingSpeed has been called.
+
+			// These are used only in delta calculations
+#if !DM_USE_FPU
+			int32_t cKc;						// The Z movement fraction multiplied by Kc and converted to integer
+#endif
 
 #if SUPPORT_CAN_EXPANSION
-			DriversBitmap drivesMoving;				// bitmap of logical drives moving - needed to keep track of whether remote drives are moving
-			static_assert(MaxAxesPlusExtruders <= DriversBitmap::MaxBits());
-#endif
-			// These are used only in delta calculations
-#if SUPPORT_LINEAR_DELTA && !MS_USE_FPU
-			int32_t cKc;							// The Z movement fraction multiplied by Kc and converted to integer
+			DriversBitmap drivesMoving;			// bitmap of logical drives moving - needed to keep track of whether remote drives are moving
+			static_assert(MaxAxesPlusExtruders <= sizeof(drivesMoving) * CHAR_BIT);
 #endif
 		} afterPrepare;
 	};
@@ -357,11 +304,8 @@ private:
 	void LogProbePosition() noexcept;
 #endif
 
-	// These three could possibly be moved into afterPrepare
-	DriveMovement* activeDMs;						// list of associated DMs that need steps, in step time order
-	DriveMovement* completedDMs;					// list of associated DMs that don't need any more steps
-	MoveSegment* shapedSegments;					// linked list of move segments used by axis DMs
-	MoveSegment* unshapedSegments;					// linked list of move segments used by extruder DMs
+	DriveMovement* activeDMs;					// list of associated DMs that need steps, in step time order
+	DriveMovement* completedDMs;				// list of associated DMs that don't need any more steps
 };
 
 // Find the DriveMovement record for a given drive even if it is completed, or return nullptr if there isn't one
@@ -446,13 +390,6 @@ inline bool DDA::CanPauseAfter() const noexcept
 		&& next->state != DDAState::frozen
 #endif
 		;
-}
-
-// Return the number of net steps already taken in this move by a particular drive
-inline int32_t DDA::GetStepsTaken(size_t drive) const noexcept
-{
-	const DriveMovement * const dmp = FindDM(drive);
-	return (dmp != nullptr) ? dmp->GetNetStepsTaken() : 0;
 }
 
 #if SUPPORT_CAN_EXPANSION

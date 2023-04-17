@@ -30,7 +30,6 @@ Licence: GPL
 #include <Fans/FansManager.h>
 #include <Heating/TemperatureError.h>
 #include "OutputMemory.h"
-#include "UniqueId.h"
 #include <Storage/FileStore.h>
 #include <Storage/FileData.h>
 #include <Storage/MassStorage.h>	// must be after Pins.h because it needs NumSdCards defined
@@ -42,7 +41,6 @@ Licence: GPL
 #include <Comms/PanelDueUpdater.h>
 #include <General/IPAddress.h>
 #include <General/function_ref.h>
-#include <Movement/ExtruderSpeedCtrl/ExtruderSpeedCtrl.h>
 
 #if defined(DUET_NG)
 # include "DueXn.h"
@@ -120,18 +118,13 @@ constexpr uint32_t maxPidSpinDelay = 5000;			// Maximum elapsed time in millisec
 enum class BoardType : uint8_t
 {
 	Auto = 0,
-#if defined(DUET3MINI_V04)			// we use the same values for both v0.2 and v0.4
+#if defined(DUET3MINI)			// we use the same values for both v0.2 and v0.4
 	Duet3Mini_Unknown,
 	Duet3Mini_WiFi,
 	Duet3Mini_Ethernet,
-#elif defined(DUET3_MB6HC)
-	Duet3_6HC_v06_100 = 1,
-	Duet3_6HC_v101 = 2,
-#elif defined(DUET3_MB6XD)
-	Duet3_6XD_v01 = 1,
-	Duet3_6XD_v100 = 2,
-#elif defined(FMDC_V02) || defined(FMDC_V03)
-	FMDC,
+#elif defined(DUET3)
+	Duet3_v06_100 = 1,
+	Duet3_v101 = 2,
 #elif defined(SAME70XPLD)
 	SAME70XPLD_0 = 1
 #elif defined(DUET_NG)
@@ -143,8 +136,18 @@ enum class BoardType : uint8_t
 	Duet2SBC_102 = 6,
 #elif defined(DUET_M)
 	DuetM_10 = 1,
+#elif defined(DUET_06_085)
+	Duet_06 = 1,
+	Duet_07 = 2,
+	Duet_085 = 3
+#elif defined(__RADDS__)
+	RADDS_15 = 1
 #elif defined(PCCB_10)
 	PCCB_v10 = 1
+#elif defined(PCCB_08) || defined(PCCB_08_X5)
+	PCCB_v08 = 1
+#elif defined(DUET3MINI)
+	Duet_5LC = 1
 #elif defined(__LPC17xx__)
 	Lpc = 1
 #else
@@ -181,7 +184,6 @@ enum class DiagnosticTestType : unsigned int
 	PrintObjectAddresses = 106,		// print the addresses and sizes of various objects
 	TimeCRC32 = 107,				// time how long it takes to calculate CRC32
 	TimeGetTimerTicks = 108,		// time now long it takes to read the step clock
-	UndervoltageEvent = 109,		// pretend an undervoltage condition has occurred
 
 #ifdef __LPC17xx__
 	PrintBoardConfiguration = 200,	// Prints out all pin/values loaded from SDCard to configure board
@@ -214,8 +216,7 @@ public:
 
 	void Init(uint16_t val) volatile noexcept
 	{
-		AtomicCriticalSectionLocker lock;
-
+		const irqflags_t flags = IrqSave();
 		sum = (uint32_t)val * (uint32_t)numAveraged;
 		index = 0;
 		isValid = false;
@@ -223,6 +224,7 @@ public:
 		{
 			readings[i] = val;
 		}
+		IrqRestore(flags);
 	}
 
 	// Call this to put a new reading into the filter
@@ -257,6 +259,7 @@ public:
 
 	// Function used as an ADC callback to feed a result into an averaging filter
 	static void CallbackFeedIntoFilter(CallbackParameter cp, uint16_t val) noexcept;
+
 
 private:
 	uint16_t readings[numAveraged];
@@ -298,17 +301,6 @@ struct AxisDriversConfig
 	DriverId driverNumbers[MaxDriversPerAxis];		// The driver numbers assigned - only the first numDrivers are meaningful
 };
 
-#if SUPPORT_NONLINEAR_EXTRUSION
-
-struct NonlinearExtrusion
-{
-	float A;
-	float B;
-	float limit;
-};
-
-#endif
-
 // The main class that defines the RepRap machine for the benefit of the other classes
 class Platform INHERIT_OBJECT_MODEL
 {
@@ -333,18 +325,14 @@ public:
 	static bool WasDeliberateError() noexcept { return deliberateError; }
 	void LogError(ErrorCode e) noexcept { errorCodeBits |= (uint32_t)e; }
 
-	bool GetAtxPowerState() const noexcept;
-	GCodeResult HandleM80(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
-	GCodeResult HandleM81(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
-	void AtxPowerOff() noexcept;
-	bool IsAtxPowerControlled() const noexcept { return PsOnPort.IsValid(); }
-	bool IsDeferredPowerDown() const noexcept { return deferredPowerDown; }
-	const IoPort& GetAtxPowerPort() const noexcept { return PsOnPort; }
+	bool AtxPower() const noexcept;
+	void AtxPowerOn() noexcept;
+	void AtxPowerOff(bool defer) noexcept;
 
 	BoardType GetBoardType() const noexcept { return board; }
 	void SetBoardType(BoardType bt) noexcept;
-	const char *_ecv_array GetElectronicsString() const noexcept;
-	const char *_ecv_array GetBoardString() const noexcept;
+	const char* GetElectronicsString() const noexcept;
+	const char* GetBoardString() const noexcept;
 
 #if SUPPORT_OBJECT_MODEL
 	size_t GetNumGpInputsToReport() const noexcept;
@@ -356,16 +344,9 @@ public:
 #endif
 
 #ifdef DUET_NG
-	const char *_ecv_array GetBoardName() const noexcept;
-	const char *_ecv_array GetBoardShortName() const noexcept;
-
-	const float GetDefaultThermistorSeriesR(size_t inputNumber) const noexcept
-	{
-		// This is only called from one place so we may as well inline it
-		return (inputNumber >= 3 && (expansionBoard == ExpansionBoardType::DueX5_v0_11 || expansionBoard == ExpansionBoardType::DueX2_v0_11))
-			? DefaultThermistorSeriesR_DueX_v0_11
-				: DefaultThermistorSeriesR;
-	}
+	bool IsDueXPresent() const noexcept { return expansionBoard != ExpansionBoardType::none; }
+	const char *GetBoardName() const noexcept;
+	const char *GetBoardShortName() const noexcept;
 #endif
 
 	const MacAddress& GetDefaultMacAddress() const noexcept { return defaultMacAddress; }
@@ -378,19 +359,19 @@ public:
 	time_t GetDateTime() const noexcept { return realTime; }		// Retrieves the current RTC datetime
 	bool GetDateTime(tm& rslt) const noexcept { return gmtime_r(&realTime, &rslt) != nullptr && realTime != 0; }
 																	// Retrieves the broken-down current RTC datetime and returns true if it's valid
-	bool SetDateTime(time_t t) noexcept;							// Sets the current RTC date and time or returns false on error
+	bool SetDateTime(time_t time) noexcept;							// Sets the current RTC date and time or returns false on error
 
   	// Communications and data storage
 	void AppendUsbReply(OutputBuffer *buffer) noexcept;
 	void AppendAuxReply(size_t auxNumber, OutputBuffer *buf, bool rawMessage) noexcept;
-	void AppendAuxReply(size_t auxNumber, const char *_ecv_array msg, bool rawMessage) noexcept;
+	void AppendAuxReply(size_t auxNumber, const char *msg, bool rawMessage) noexcept;
 
 	void ResetChannel(size_t chan) noexcept;						// Re-initialise a serial channel
     bool IsAuxEnabled(size_t auxNumber) const noexcept;				// Any device on the AUX line?
     void EnableAux(size_t auxNumber) noexcept;
     bool IsAuxRaw(size_t auxNumber) const noexcept;
 	void SetAuxRaw(size_t auxNumber, bool raw) noexcept;
-#if SUPPORT_PANELDUE_FLASH
+#if HAS_AUX_DEVICES
 	PanelDueUpdater* GetPanelDueUpdater() noexcept { return panelDueUpdater; }
 	void InitPanelDueUpdater() noexcept;
 #endif
@@ -412,37 +393,36 @@ public:
 #endif
 
 	// File functions
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE || HAS_EMBEDDED_FILES
-	FileStore* OpenFile(const char *_ecv_array folder, const char *_ecv_array fileName, OpenMode mode, uint32_t preAllocSize = 0) const noexcept;
-	bool FileExists(const char *_ecv_array folder, const char *_ecv_array filename) const noexcept;
-# if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
-	bool Delete(const char *_ecv_array folder, const char *_ecv_array filename) const noexcept;
-# endif
+#if HAS_MASS_STORAGE || HAS_LINUX_INTERFACE
+	FileStore* OpenFile(const char* folder, const char* fileName, OpenMode mode, uint32_t preAllocSize = 0) const noexcept;
+	bool FileExists(const char* folder, const char *filename) const noexcept;
+#endif
+#if HAS_MASS_STORAGE
+	bool Delete(const char* folder, const char *filename) const noexcept;
+	bool DirectoryExists(const char *folder, const char *dir) const noexcept;
 
-	static const char *_ecv_array GetWebDir() noexcept; 		// Where the html etc files are
-	static const char *_ecv_array GetGCodeDir() noexcept; 		// Where the gcodes are
-	static const char *_ecv_array GetMacroDir() noexcept;		// Where the user-defined macros are
+	const char* GetWebDir() const noexcept; 					// Where the html etc files are
+	const char* GetGCodeDir() const noexcept; 					// Where the gcodes are
+	const char* GetMacroDir() const noexcept;					// Where the user-defined macros are
 
 	// Functions to work with the system files folder
-	GCodeResult SetSysDir(const char *_ecv_array dir, const StringRef& reply) noexcept;				// Set the system files path
-	bool SysFileExists(const char *_ecv_array filename) const noexcept;
-	FileStore* OpenSysFile(const char *_ecv_array filename, OpenMode mode) const noexcept;
-# if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
-	bool DeleteSysFile(const char *_ecv_array filename) const noexcept;
-# endif
-	bool MakeSysFileName(const StringRef& rslt, const char *_ecv_array filename) const noexcept;
+	GCodeResult SetSysDir(const char* dir, const StringRef& reply) noexcept;				// Set the system files path
+	bool SysFileExists(const char *filename) const noexcept;
+	FileStore* OpenSysFile(const char *filename, OpenMode mode) const noexcept;
+	bool DeleteSysFile(const char *filename) const noexcept;
+	bool MakeSysFileName(const StringRef& result, const char *filename) const noexcept;
 	void AppendSysDir(const StringRef & path) const noexcept;
 	ReadLockedPointer<const char> GetSysDir() const noexcept;	// where the system files are
 #endif
 
 	// Message output (see MessageType for further details)
-	void Message(MessageType type, const char *_ecv_array message) noexcept;
+	void Message(MessageType type, const char *message) noexcept;
 	void Message(MessageType type, OutputBuffer *buffer) noexcept;
-	void MessageF(MessageType type, const char *_ecv_array fmt, ...) noexcept __attribute__ ((format (printf, 3, 4)));
-	void MessageV(MessageType type, const char *_ecv_array fmt, va_list vargs) noexcept;
-	void DebugMessage(const char *_ecv_array fmt, va_list vargs) noexcept;
+	void MessageF(MessageType type, const char *fmt, ...) noexcept __attribute__ ((format (printf, 3, 4)));
+	void MessageF(MessageType type, const char *fmt, va_list vargs) noexcept;
+	void DebugMessage(const char *fmt, va_list vargs) noexcept;
 	bool FlushMessages() noexcept;								// Flush messages to USB and aux, returning true if there is more to send
-	void SendAlert(MessageType mt, const char *_ecv_array message, const char *_ecv_array title, int sParam, float tParam, AxesBitmap controls) noexcept;
+	void SendAlert(MessageType mt, const char *message, const char *title, int sParam, float tParam, AxesBitmap controls) noexcept;
 	void StopLogging() noexcept;
 
 	// Movement
@@ -454,17 +434,15 @@ public:
 	void SetDriverAbsoluteDirection(size_t driver, bool dVal) noexcept;
 	void SetEnableValue(size_t driver, int8_t eVal) noexcept;
 	int8_t GetEnableValue(size_t driver) const noexcept;
-	void EnableDrivers(size_t axisOrExtruder, bool unconditional) noexcept;
+	void EnableDrivers(size_t axisOrExtruder) noexcept;
 	void EnableOneLocalDriver(size_t driver, float requiredCurrent) noexcept;
 	void DisableAllDrivers() noexcept;
 	void DisableDrivers(size_t axisOrExtruder) noexcept;
 	void DisableOneLocalDriver(size_t driver) noexcept;
 	void EmergencyDisableDrivers() noexcept;
 	void SetDriversIdle() noexcept;
-	GCodeResult ConfigureDriverBrakePort(GCodeBuffer& gb, const StringRef& reply, size_t driver) noexcept
-		pre(driver < GetNumActualDirectDrivers());
 	GCodeResult SetMotorCurrent(size_t axisOrExtruder, float current, int code, const StringRef& reply) noexcept;
-	int GetMotorCurrent(size_t axisOrExtruder, int code) const noexcept;
+	float GetMotorCurrent(size_t axisOrExtruder, int code) const noexcept;
 	void SetIdleCurrentFactor(float f) noexcept;
 	float GetIdleCurrentFactor() const noexcept { return idleCurrentFactor; }
 	bool SetDriverMicrostepping(size_t driver, unsigned int microsteps, int mode) noexcept;
@@ -472,23 +450,18 @@ public:
 	unsigned int GetMicrostepping(size_t axisOrExtruder, bool& interpolation) const noexcept;
 	void SetDriverStepTiming(size_t driver, const float microseconds[4]) noexcept;
 	bool GetDriverStepTiming(size_t driver, float microseconds[4]) const noexcept;
-
-#ifdef DUET3_MB6XD
-	void GetActualDriverTimings(float timings[4]) noexcept;
-#endif
-
 	float DriveStepsPerUnit(size_t axisOrExtruder) const noexcept;
-	const float *_ecv_array GetDriveStepsPerUnit() const noexcept
+	const float *GetDriveStepsPerUnit() const noexcept
 		{ return driveStepsPerUnit; }
 	void SetDriveStepsPerUnit(size_t axisOrExtruder, float value, uint32_t requestedMicrostepping) noexcept;
 	float Acceleration(size_t axisOrExtruder) const noexcept;
-	const float *_ecv_array Accelerations(bool useReduced) const noexcept;
-	void SetAcceleration(size_t axisOrExtruder, float value, bool reduced) noexcept;
+	const float* Accelerations() const noexcept;
+	void SetAcceleration(size_t axisOrExtruder, float value) noexcept;
 	float MaxFeedrate(size_t axisOrExtruder) const noexcept;
-	const float *_ecv_array MaxFeedrates() const noexcept { return maxFeedrates; }
+	const float* MaxFeedrates() const noexcept { return maxFeedrates; }
 	void SetMaxFeedrate(size_t axisOrExtruder, float value) noexcept;
 	float MinMovementSpeed() const noexcept { return minimumMovementSpeed; }
-	void SetMinMovementSpeed(float value) noexcept;
+	void SetMinMovementSpeed(float value) noexcept { minimumMovementSpeed = max<float>(value, 0.01); }
 	float GetInstantDv(size_t axis) const noexcept;
 	void SetInstantDv(size_t axis, float value) noexcept;
 	float AxisMaximum(size_t axis) const noexcept;
@@ -496,6 +469,9 @@ public:
 	float AxisMinimum(size_t axis) const noexcept;
 	void SetAxisMinimum(size_t axis, float value, bool byProbing) noexcept;
 	float AxisTotalLength(size_t axis) const noexcept;
+
+	float GetPressureAdvance(size_t extruder) const noexcept;
+	GCodeResult SetPressureAdvance(float advance, GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
 
 	inline AxesBitmap GetLinearAxes() const noexcept { return linearAxes; }
 	inline AxesBitmap GetRotationalAxes() const noexcept { return rotationalAxes; }
@@ -518,31 +494,19 @@ public:
 	void SetExtruderDriver(size_t extruder, DriverId driver) noexcept
 		pre(extruder < MaxExtruders);
 	uint32_t GetDriversBitmap(size_t axisOrExtruder) const noexcept	// get the bitmap of driver step bits for this axis or extruder
-		pre(axisOrExtruder < MaxAxesPlusExtruders + NumDirectDrivers)
+		pre(axisOrExtruder < MaxAxesPlusExtruders + NumLocalDrivers)
 		{ return driveDriverBits[axisOrExtruder]; }
-
-#ifdef DUET3_MB6XD		// the first element has a special meaning when we use a TC to generate the steps
-	uint32_t GetSlowDriverStepPeriodClocks() { return stepPulseMinimumPeriodClocks; }
-	uint32_t GetSlowDriverDirHoldClocksFromLeadingEdge() { return directionHoldClocksFromLeadingEdge; }
-	uint32_t GetSlowDriverDirSetupClocks() const noexcept { return directionSetupClocks; }
-#else
 	uint32_t GetSlowDriversBitmap() const noexcept { return slowDriversBitmap; }
 	uint32_t GetSlowDriverStepHighClocks() const noexcept { return slowDriverStepTimingClocks[0]; }
 	uint32_t GetSlowDriverStepLowClocks() const noexcept { return slowDriverStepTimingClocks[1]; }
-	uint32_t GetSlowDriverDirHoldClocksFromTrailingEdge() const noexcept { return slowDriverStepTimingClocks[3]; }
 	uint32_t GetSlowDriverDirSetupClocks() const noexcept { return slowDriverStepTimingClocks[2]; }
-#endif
-
+	uint32_t GetSlowDriverDirHoldClocks() const noexcept { return slowDriverStepTimingClocks[3]; }
 	uint32_t GetSteppingEnabledDrivers() const noexcept { return steppingEnabledDriversBitmap; }
 	void DisableSteppingDriver(uint8_t driver) noexcept { steppingEnabledDriversBitmap &= ~StepPins::CalcDriverBitmap(driver); }
-	void EnableAllSteppingDrivers() noexcept { steppingEnabledDriversBitmap = 0xFFFFFFFFu; }
-
-#ifdef DUET3_MB6XD
-	bool HasDriverError(size_t driver) const noexcept;
-#endif
+	void EnableAllSteppingDrivers() noexcept { steppingEnabledDriversBitmap = 0xFFFFFFFF; }
 
 #if SUPPORT_NONLINEAR_EXTRUSION
-	const NonlinearExtrusion& GetExtrusionCoefficients(size_t extruder) const noexcept pre(extruder < MaxExtruders) { return nonlinearExtrusion[extruder]; }
+	bool GetExtrusionCoefficients(size_t extruder, float& a, float& b, float& limit) const noexcept;
 	void SetNonlinearExtrusion(size_t extruder, float a, float b, float limit) noexcept;
 #endif
 
@@ -553,7 +517,7 @@ public:
 	const volatile ZProbeAveragingFilter& GetZProbeOnFilter() const noexcept { return zProbeOnFilter; }
 	const volatile ZProbeAveragingFilter& GetZProbeOffFilter() const noexcept{ return zProbeOffFilter; }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WritePlatformParameters(FileStore *f, bool includingG31) const noexcept;
 #endif
 
@@ -566,13 +530,17 @@ public:
 
 	int GetAveragingFilterIndex(const IoPort&) const noexcept;
 
+	void UpdateConfiguredHeaters() noexcept;
+
 	// AUX device
 	void PanelDueBeep(int freq, int ms) noexcept;
-	void SendPanelDueMessage(size_t auxNumber, const char *_ecv_array msg) noexcept;
+	void SendPanelDueMessage(size_t auxNumber, const char* msg) noexcept;
 
 	// Hotend configuration
 	float GetFilamentWidth() const noexcept;
 	void SetFilamentWidth(float width) noexcept;
+	float GetNozzleDiameter() const noexcept;
+	void SetNozzleDiameter(float diameter) noexcept;
 
 	// Fire the inkjet (if any) in the given pattern
 	// If there is no inkjet false is returned; if there is one this returns true
@@ -581,14 +549,14 @@ public:
 
 	// MCU temperature
 #if HAS_CPU_TEMP_SENSOR
-	MinCurMax GetMcuTemperatures() const noexcept;
+	MinMaxCurrent GetMcuTemperatures() const noexcept;
 	void SetMcuTemperatureAdjust(float v) noexcept { mcuTemperatureAdjust = v; }
 	float GetMcuTemperatureAdjust() const noexcept { return mcuTemperatureAdjust; }
 #endif
 
 #if HAS_VOLTAGE_MONITOR
 	// Power in voltage
-	MinCurMax GetPowerVoltages() const noexcept;
+	MinMaxCurrent GetPowerVoltages() const noexcept;
 	float GetCurrentPowerVoltage() const noexcept;
 	bool IsPowerOk() const noexcept;
 	void DisableAutoSave() noexcept;
@@ -598,12 +566,13 @@ public:
 
 #if HAS_12V_MONITOR
 	// 12V rail voltage
-	MinCurMax GetV12Voltages() const noexcept;
+	MinMaxCurrent GetV12Voltages() const noexcept;
 	float GetCurrentV12Voltage() const noexcept;
 #endif
 
 #if HAS_SMART_DRIVERS
 	float GetTmcDriversTemperature(unsigned int boardNumber) const noexcept;
+	void DriverCoolingFansOnOff(DriverChannelsBitmap driverChannelsMonitored, bool on) noexcept;
 	unsigned int GetNumSmartDrivers() const noexcept { return numSmartDrivers; }
 #endif
 
@@ -620,10 +589,10 @@ public:
 #endif
 
 	// Logging support
-	const char *_ecv_array GetLogLevel() const noexcept;
+	const char *GetLogLevel() const noexcept;
 #if HAS_MASS_STORAGE
 	GCodeResult ConfigureLogging(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
-	const char *_ecv_array null GetLogFileName() const noexcept;
+	const char *GetLogFileName() const noexcept;
 #endif
 
 	// Ancillary PWM
@@ -638,7 +607,6 @@ public:
 	void SetLaserPwm(Pwm_t pwm) noexcept;
 	float GetLaserPwm() const noexcept;							// return laser PWM in 0..1
 	bool AssignLaserPin(GCodeBuffer& gb, const StringRef& reply);
-	void ReleaseLaserPin() noexcept;
 	void SetLaserPwmFrequency(PwmFrequency freq) noexcept;
 #endif
 
@@ -646,13 +614,13 @@ public:
 	GCodeResult ConfigurePort(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException);
 
 	GpOutputPort& GetGpOutPort(size_t gpoutPortNumber) noexcept
-		pre(gpoutPortNumber < MaxGpOutPorts)	{ return gpoutPorts[gpoutPortNumber]; }
+		pre(gpioPortNumber < MaxGpOutPorts)	{ return gpoutPorts[gpoutPortNumber]; }
 	const GpInputPort& GetGpInPort(size_t gpinPortNumber) const noexcept
 		pre(gpinPortNumber < MaxGpInPorts) 	{ return gpinPorts[gpinPortNumber]; }
 
 #if MCU_HAS_UNIQUE_ID
-	const UniqueId& GetUniqueId() const noexcept { return uniqueId; }
 	uint32_t Random() noexcept;
+	const char *GetUniqueIdString() const noexcept { return uniqueIdChars; }
 #endif
 
 #if SUPPORT_CAN_EXPANSION
@@ -666,23 +634,16 @@ public:
 	GCodeResult EutSetMotorCurrents(const CanMessageMultipleDrivesRequest<float>& msg, size_t dataLength, const StringRef& reply) noexcept;
 	GCodeResult EutSetStepsPerMmAndMicrostepping(const CanMessageMultipleDrivesRequest<StepsPerUnitAndMicrostepping>& msg, size_t dataLength, const StringRef& reply) noexcept;
 	GCodeResult EutHandleSetDriverStates(const CanMessageMultipleDrivesRequest<DriverStateControl>& msg, const StringRef& reply) noexcept;
+	float EutGetRemotePressureAdvance(size_t driver) const noexcept;
+	GCodeResult EutSetRemotePressureAdvance(const CanMessageMultipleDrivesRequest<float>& msg, size_t dataLength, const StringRef& reply) noexcept;
 	GCodeResult EutProcessM569(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult EutProcessM569Point2(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult EutProcessM569Point7(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	GCodeResult EutProcessM915(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-	void SendDriversStatus(CanMessageBuffer& buf) noexcept;
 #endif
 
 #if VARIABLE_NUM_DRIVERS
 	void AdjustNumDrivers(size_t numDriversNotAvailable) noexcept;
 #endif
 
-#if SUPPORT_CAN_EXPANSION
-	void OnProcessingCanMessage() noexcept;								// called when we start processing any CAN message except for regular messages e.g. time sync
-#endif
-
-	// GG
- 	//ExtruderSpeedCtrl ExtrSpeedCtrl;
+	uint16_t ProbeValue;
 
 protected:
 	DECLARE_OBJECT_MODEL
@@ -690,9 +651,9 @@ protected:
 	OBJECT_MODEL_ARRAY(workplaceOffsets)
 
 private:
-	const char *_ecv_array InternalGetSysDir() const noexcept;  				// where the system files are - not thread-safe!
+	const char* InternalGetSysDir() const noexcept;  					// where the system files are - not thread-safe!
 
-	void RawMessage(MessageType type, const char *_ecv_array message) noexcept;	// called by Message after handling error/warning flags
+	void RawMessage(MessageType type, const char *message) noexcept;	// called by Message after handling error/warning flags
 
 	float GetCpuTemperature() const noexcept;
 
@@ -705,12 +666,12 @@ private:
 	void IterateLocalDrivers(size_t axisOrExtruder, function_ref<void(uint8_t) /*noexcept*/ > func) noexcept { IterateDrivers(axisOrExtruder, func); }
 #endif
 
-#if HAS_SMART_DRIVERS
-	void ReportDrivers(MessageType mt, DriversBitmap& whichDrivers, const char *_ecv_array text, bool& reported) noexcept;
+#if SUPPORT_REMOTE_COMMANDS
+	float remotePressureAdvance[NumDirectDrivers];
 #endif
 
-#ifdef DUET3_MB6XD
-	void UpdateDriverTimings() noexcept;
+#if HAS_SMART_DRIVERS
+	void ReportDrivers(MessageType mt, DriversBitmap& whichDrivers, const char* text, bool& reported) noexcept;
 #endif
 
 #if HAS_MASS_STORAGE
@@ -726,7 +687,9 @@ private:
 
 	// Board and processor
 #if MCU_HAS_UNIQUE_ID
-	UniqueId uniqueId;
+	void ReadUniqueId();
+	uint32_t uniqueId[5];
+	char uniqueIdChars[30 + 5 + 1];			// 30 characters, 5 separators, 1 null terminator
 #endif
 
 	BoardType board;
@@ -743,7 +706,7 @@ private:
 	// Drives
 	void UpdateMotorCurrent(size_t driver, float current) noexcept;
 	void SetDriverDirection(uint8_t driver, bool direction) noexcept
-	pre(driver < NumDirectDrivers);
+	pre(driver < DRIVES);
 
 #if VARIABLE_NUM_DRIVERS && SUPPORT_12864_LCD
 	size_t numActualDirectDrivers;
@@ -752,23 +715,16 @@ private:
 	bool directions[NumDirectDrivers];
 	int8_t enableValues[NumDirectDrivers];
 
-#ifdef DUET3_MB6XD
-	bool driverErrPinsActiveLow;
-#endif
-
-	IoPort brakePorts[NumDirectDrivers];
-
 	float motorCurrents[MaxAxesPlusExtruders];				// the normal motor current for each stepper driver
 	float motorCurrentFraction[MaxAxesPlusExtruders];		// the percentages of normal motor current that each driver is set to
 	float standstillCurrentPercent[MaxAxesPlusExtruders];	// the percentages of normal motor current that each driver uses when in standstill
 	uint16_t microstepping[MaxAxesPlusExtruders];			// the microstepping used for each axis or extruder, top bit is set if interpolation enabled
 
 	volatile DriverStatus driverState[MaxAxesPlusExtruders];
-	float maxFeedrates[MaxAxesPlusExtruders];				// max feed rates in mm per step clock
-	float normalAccelerations[MaxAxesPlusExtruders];		// max accelerations in mm per step clock squared for normal moves
-	float reducedAccelerations[MaxAxesPlusExtruders];		// max accelerations in mm per step clock squared for probing and stall detection moves
+	float maxFeedrates[MaxAxesPlusExtruders];
+	float accelerations[MaxAxesPlusExtruders];
 	float driveStepsPerUnit[MaxAxesPlusExtruders];
-	float instantDvs[MaxAxesPlusExtruders];					// max jerk in mm per step clock
+	float instantDvs[MaxAxesPlusExtruders];
 	uint32_t driveDriverBits[MaxAxesPlusExtruders + NumDirectDrivers];
 															// the bitmap of local driver port bits for each axis or extruder, followed by the bitmaps for the individual Z motors
 	AxisDriversConfig axisDrivers[MaxAxes];					// the driver numbers assigned to each axis
@@ -779,33 +735,26 @@ private:
 	AxesBitmap shortcutAxes;								// axes that wrap modulo 360 and for which G0 may choose the shortest direction
 #endif
 
+	float pressureAdvance[MaxExtruders];
 #if SUPPORT_NONLINEAR_EXTRUSION
-	NonlinearExtrusion nonlinearExtrusion[MaxExtruders];	// nonlinear extrusion coefficients
+	float nonlinearExtrusionA[MaxExtruders], nonlinearExtrusionB[MaxExtruders], nonlinearExtrusionLimit[MaxExtruders];
 #endif
 
 	DriverId extruderDrivers[MaxExtruders];					// the driver number assigned to each extruder
-#ifdef DUET3_MB6XD
-	float driverTimingMicroseconds[NumDirectDrivers][4];	// step high time, step low time, direction setup time to step high, direction hold time from step low (1 set per driver)
-	uint32_t stepPulseMinimumPeriodClocks;					// minimum period between leading edges of step pulses, in step clocks
-	uint32_t directionSetupClocks;							// minimum direction change to step high time, in step clocks
-	uint32_t directionHoldClocksFromLeadingEdge;			// minimum step high to direction low step clocks, calculated from the step low to direction change hold time
-	const Pin *ENABLE_PINS;									// 6XD version 0.1 uses different enable pins from version 1.0 and later
-#else
-	uint32_t slowDriversBitmap;								// bitmap of driver port bits that need extended step pulse timing
 	uint32_t slowDriverStepTimingClocks[4];					// minimum step high, step low, dir setup and dir hold timing for slow drivers
-#endif
+	uint32_t slowDriversBitmap;								// bitmap of driver port bits that need extended step pulse timing
 	uint32_t steppingEnabledDriversBitmap;					// mask of driver bits that we haven't disabled temporarily
 	float idleCurrentFactor;
-	float minimumMovementSpeed;								// minimum allowed movement speed in mm per step clock
+	float minimumMovementSpeed;
 
 #if HAS_SMART_DRIVERS
-	size_t numSmartDrivers;											// the number of TMC drivers we have, the remaining are simple enable/step/dir drivers
+	size_t numSmartDrivers;									// the number of TMC drivers we have, the remaining are simple enable/step/dir drivers
 	DriversBitmap temperatureShutdownDrivers, temperatureWarningDrivers, shortToGroundDrivers;
-	MillisTimer openLoadTimers[MaxSmartDrivers];
-#endif
-
-	StandardDriverStatus lastEventStatus[NumDirectDrivers];
+	DriversBitmap openLoadADrivers, openLoadBDrivers, notOpenLoadADrivers, notOpenLoadBDrivers;
+	MillisTimer openLoadATimer, openLoadBTimer;
+	MillisTimer driversFanTimers[NumTmcDriversSenseChannels];		// driver cooling fan timers
 	uint8_t nextDriveToPoll;
+#endif
 
 	bool driversPowered;
 
@@ -814,11 +763,12 @@ private:
 #endif
 
 #if HAS_STALL_DETECT
-	DriversBitmap logOnStallDrivers, eventOnStallDrivers;
+	DriversBitmap logOnStallDrivers, pauseOnStallDrivers, rehomeOnStallDrivers;
+	DriversBitmap stalledDrivers, stalledDriversToLog, stalledDriversToPause, stalledDriversToRehome;
 #endif
 
 #if defined(__LPC17xx__)
-	MCP4461 mcp4451;	// works for 5561 (only volatile setting commands)
+	MCP4461 mcp4451;// works for 5561 (only volatile setting commands)
 #endif
 
 	// Endstops
@@ -850,9 +800,12 @@ private:
 	float axisMinima[MaxAxes];
 	AxesBitmap axisMinimaProbed, axisMaximaProbed;
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	static bool WriteAxisLimits(FileStore *f, AxesBitmap axesProbed, const float limits[MaxAxes], int sParam) noexcept;
 #endif
+
+	// Heaters
+	HeatersBitmap configuredHeaters;								// bitmap of all real heaters in use
 
 	// Fans
 	uint32_t lastFanCheckTime;
@@ -866,14 +819,12 @@ private:
 
 #if HAS_AUX_DEVICES
 	AuxDevice auxDevices[NumSerialChannels - 1];
-#endif
-#if SUPPORT_PANELDUE_FLASH
 	PanelDueUpdater* panelDueUpdater;
 #endif
 
 	// Files
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE || HAS_EMBEDDED_FILES
-	const char *_ecv_array sysDir;
+#if HAS_MASS_STORAGE
+	const char *sysDir;
 	mutable ReadWriteLock sysDirLock;
 #endif
 
@@ -886,6 +837,7 @@ private:
 
 	// Hotend configuration
 	float filamentWidth;
+	float nozzleDiameter;
 
 	// Power monitoring
 #if HAS_VOLTAGE_MONITOR
@@ -913,12 +865,7 @@ private:
 	uint32_t numV12UnderVoltageEvents, previousV12UnderVoltageEvents;
 #endif
 
-	// Event handling
-	uint32_t lastDriverPollMillis;						// when we last checked the drivers and voltage monitoring
-
-#if SUPPORT_CAN_EXPANSION
-	uint32_t whenLastCanMessageProcessed;
-#endif
+	uint32_t lastWarningMillis;							// When we last sent a warning message
 
 	// RTC
 	time_t realTime;									// the current date/time, or zero if never set
@@ -935,30 +882,27 @@ private:
 #endif
 
 	// Power on/off
-	IoPort PsOnPort;
 	bool deferredPowerDown;
 
 	// Misc
 	static bool deliberateError;						// true if we deliberately caused an exception for testing purposes. Must be static in case of exception during startup.
-
-	bool StepState;
 };
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 // Where the htm etc files are
-inline const char *_ecv_array Platform::GetWebDir() noexcept
+inline const char* Platform::GetWebDir() const noexcept
 {
 	return WEB_DIR;
 }
 
 // Where the gcodes are
-inline const char *_ecv_array Platform::GetGCodeDir() noexcept
+inline const char* Platform::GetGCodeDir() const noexcept
 {
 	return GCODE_DIR;
 }
 
-inline const char *_ecv_array Platform::GetMacroDir() noexcept
+inline const char* Platform::GetMacroDir() const noexcept
 {
 	return MACRO_DIR;
 }
@@ -976,17 +920,17 @@ inline float Platform::DriveStepsPerUnit(size_t drive) const noexcept
 
 inline float Platform::Acceleration(size_t drive) const noexcept
 {
-	return normalAccelerations[drive];
+	return accelerations[drive];
 }
 
-inline const float *_ecv_array Platform::Accelerations(bool useReduced) const noexcept
+inline const float* Platform::Accelerations() const noexcept
 {
-	return (useReduced) ? reducedAccelerations : normalAccelerations;
+	return accelerations;
 }
 
-inline void Platform::SetAcceleration(size_t drive, float value, bool reduced) noexcept
+inline void Platform::SetAcceleration(size_t drive, float value) noexcept
 {
-	((reduced) ? reducedAccelerations : normalAccelerations)[drive] = max<float>(value, ConvertAcceleration(MinimumAcceleration));	// don't allow zero or negative
+	accelerations[drive] = max<float>(value, 1.0);		// don't allow zero or negative
 }
 
 inline float Platform::MaxFeedrate(size_t drive) const noexcept
@@ -996,22 +940,17 @@ inline float Platform::MaxFeedrate(size_t drive) const noexcept
 
 inline void Platform::SetMaxFeedrate(size_t drive, float value) noexcept
 {
-	maxFeedrates[drive] = max<float>(value, minimumMovementSpeed);						// don't allow zero or negative, but do allow small values
-}
-
-inline void Platform::SetInstantDv(size_t drive, float value) noexcept
-{
-	instantDvs[drive] = max<float>(value, ConvertSpeedFromMmPerSec(MinimumJerk));		// don't allow zero or negative values, they causes Move to loop indefinitely
-}
-
-inline void Platform::SetMinMovementSpeed(float value) noexcept
-{
-	minimumMovementSpeed = max<float>(value, ConvertSpeedFromMmPerSec(AbsoluteMinFeedrate));
+	maxFeedrates[drive] = max<float>(value, minimumMovementSpeed);	// don't allow zero or negative, but do allow small values
 }
 
 inline float Platform::GetInstantDv(size_t drive) const noexcept
 {
 	return instantDvs[drive];
+}
+
+inline void Platform::SetInstantDv(size_t drive, float value) noexcept
+{
+	instantDvs[drive] = max<float>(value, 0.1);			// don't allow zero or negative values, they causes Move to loop indefinitely
 }
 
 inline size_t Platform::GetNumActualDirectDrivers() const noexcept
@@ -1129,6 +1068,11 @@ inline IPAddress Platform::GateWay() const noexcept
 	return gateWay;
 }
 
+inline float Platform::GetPressureAdvance(size_t extruder) const noexcept
+{
+	return (extruder < MaxExtruders) ? pressureAdvance[extruder] : 0.0;
+}
+
 inline float Platform::GetFilamentWidth() const noexcept
 {
 	return filamentWidth;
@@ -1137,6 +1081,16 @@ inline float Platform::GetFilamentWidth() const noexcept
 inline void Platform::SetFilamentWidth(float width) noexcept
 {
 	filamentWidth = width;
+}
+
+inline float Platform::GetNozzleDiameter() const noexcept
+{
+	return nozzleDiameter;
+}
+
+inline void Platform::SetNozzleDiameter(float diameter) noexcept
+{
+	nozzleDiameter = diameter;
 }
 
 #endif

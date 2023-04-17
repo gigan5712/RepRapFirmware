@@ -5,7 +5,7 @@
  *      Author: David
  */
 
-#include "LedStripDriver.h"
+#include <Fans/LedStripDriver.h>
 
 #if SUPPORT_LED_STRIPS
 
@@ -15,9 +15,9 @@
 #include <GCodes/GCodes.h>
 
 // Define which types of LED strip this hardware supports
-#define SUPPORT_DMA_NEOPIXEL		(defined(DUET3_MB6HC) || defined(DUET3_MB6XD) || defined(DUET3MINI) || defined(PCCB_10))
-#define SUPPORT_DMA_DOTSTAR			(defined(DUET3_MB6HC) || defined(DUET3_MB6XD) || defined(PCCB_10))
-#define SUPPORT_BITBANG_NEOPIXEL	(defined(DUET3MINI_V04) || defined(DUET_NG))
+#define SUPPORT_DMA_NEOPIXEL		(defined(DUET3_V06) || defined(DUET3MINI) || defined(PCCB_10))
+#define SUPPORT_DMA_DOTSTAR			(defined(DUET3_V06) || defined(PCCB_10))
+#define SUPPORT_BITBANG_NEOPIXEL	(defined(DUET3MINI) || defined(DUET_NG))
 
 #if SUPPORT_DMA_NEOPIXEL || SUPPORT_DMA_DOTSTAR
 
@@ -53,18 +53,18 @@ namespace LedStripDriver
 {
 	constexpr uint32_t DefaultDotStarSpiClockFrequency = 1000000;		// 1MHz default
 	constexpr uint32_t DefaultNeoPixelSpiClockFrequency = 2500000;		// must be between about 2MHz and about 4MHz
-	constexpr uint32_t MinNeoPixelResetTicks = (250 * StepClockRate)/1000000;	// 250us minimum Neopixel reset time on later chips
+	constexpr uint32_t MinNeoPixelResetTicks = (250 * StepTimer::StepClockRate)/1000000;		// 250us minimum Neopixel reset time on later chips
 
 	// Define the size of the buffer used to accumulate a sequence of colours to send to the string
-#if defined(DUET3_MB6HC) || defined(DUET3_MB6XD)
+#ifdef DUET3_V06
 	// We have plenty of non-cached RAM left on Duet 3
-	constexpr size_t ChunkBufferSize = 240 * 16;						// DotStar LEDs use 4 bytes/LED, NeoPixel RGBW use 16 bytes/LED
+	constexpr size_t ChunkBufferSize = 240 * 16;						// DotStar LEDs use 4 bytes/LED, NeoPixel RGBW use 16 bytes/LED.
 #elif defined(DUET3MINI)
-	constexpr size_t ChunkBufferSize = 80 * 16;							// NeoPixel RGBW use 16 bytes/LED (increased to 80 LEDs for Justin)
+	constexpr size_t ChunkBufferSize = 80 * 16;							// increased for Justin
 #elif defined(DUET_NG)
-	constexpr size_t ChunkBufferSize = 80 * 3;							// NeoPixel RGB use 3 bytes/LED
+	constexpr size_t ChunkBufferSize = 60 * 3;							// NeoPixel RGB use 3 bytes/LED
 #else
-	constexpr size_t ChunkBufferSize = 60 * 16;							// DotStar LEDs use 4 bytes/LED, NeoPixel RGBW use 16 bytes/LED
+	constexpr size_t ChunkBufferSize = 60 * 16;							// DotStar LEDs use 4 bytes/LED, NeoPixel RGBW use 16 bytes/LED.
 #endif
 
 	enum class LedType : unsigned int
@@ -353,9 +353,8 @@ namespace LedStripDriver
 	// Send data to NeoPixel LEDs by DMA to SPI
 	static GCodeResult SpiSendNeoPixelData(uint8_t red, uint8_t green, uint8_t blue, uint8_t white, uint32_t numLeds, bool includeWhite, bool following) noexcept
 	{
-		const unsigned int bytesPerLed = (includeWhite) ? 16 : 12;
-		uint8_t *p = chunkBuffer + (bytesPerLed * numAlreadyInBuffer);
-		while (numLeds != 0 && p + bytesPerLed <= chunkBuffer + ARRAY_SIZE(chunkBuffer))
+		uint8_t *p = chunkBuffer + (12 * numAlreadyInBuffer);
+		while (numLeds != 0 && p <= chunkBuffer + ARRAY_SIZE(chunkBuffer) - 12)
 		{
 			EncodeNeoPixelByte(p, green);
 			p += 4;
@@ -374,7 +373,7 @@ namespace LedStripDriver
 
 		if (!following)
 		{
-			DmaSendChunkBuffer(bytesPerLed * numAlreadyInBuffer);		// send data by DMA to SPI
+			DmaSendChunkBuffer(((includeWhite) ? 16 : 12) * numAlreadyInBuffer);		// send data by DMA to SPI
 			numAlreadyInBuffer = 0;
 			needStartFrame = true;
 		}
@@ -458,7 +457,7 @@ void LedStripDriver::Init() noexcept
 	hri_mclk_set_AHBMASK_QSPI_bit(MCLK);
 	hri_mclk_clear_AHBMASK_QSPI_2X_bit(MCLK);			// we don't need the 2x clock
 	hri_mclk_set_APBCMASK_QSPI_bit(MCLK);
-#elif defined(DUET3_MB6HC) || defined(DUET3_MB6XD) || defined(PCCB_10)
+#elif defined(DUET3_V06) || defined(PCCB_10)
 	SetPinFunction(DotStarMosiPin, DotStarPinMode);
 	SetPinFunction(DotStarSclkPin, DotStarPinMode);
 	pmc_enable_periph_clk(DotStarClockId);				// enable the clock to the USART or SPI peripheral
@@ -475,24 +474,6 @@ void LedStripDriver::Init() noexcept
 	busy = false;
 }
 
-// Return true if we must stop movement before we handle this command
-bool LedStripDriver::MustStopMovement(GCodeBuffer& gb) noexcept
-{
-#if SUPPORT_BITBANG_NEOPIXEL
-	try
-	{
-		const LedType lt = (gb.Seen('X')) ? (LedType)gb.GetLimitedUIValue('X', 0, ARRAY_SIZE(LedTypeNames)) : ledType;
-		return (lt == LedType::neopixelRGBBitBang || lt == LedType::neopixelRGBWBitBang) && gb.SeenAny("RUBWPYSF");
-	}
-	catch (const GCodeException&)
-	{
-		return true;
-	}
-#else
-	return false;
-#endif
-}
-
 // This function handles M150
 // For DotStar LEDs:
 // 	We can handle an unlimited length LED strip, because we can send the data in multiple chunks.
@@ -504,17 +485,6 @@ bool LedStripDriver::MustStopMovement(GCodeBuffer& gb) noexcept
 //	We buffer up incoming data until we get a command with the Following parameter missing or set to zero, then we DMA it all.
 GCodeResult LedStripDriver::SetColours(GCodeBuffer& gb, const StringRef& reply) THROWS(GCodeException)
 {
-#if SUPPORT_BITBANG_NEOPIXEL
-	// Interrupts are disabled while bit-banging data, which will mess up the step timing. So make sure movement has stopped if we are going to use bit-banging
-	if (MustStopMovement(gb))
-	{
-		if (!reprap.GetGCodes().LockMovementAndWaitForStandstill(gb))
-		{
-			return GCodeResult::notFinished;
-		}
-	}
-#endif
-
 #if SUPPORT_DMA_DOTSTAR || SUPPORT_DMA_NEOPIXEL
 	if (DmaInProgress())													// if we are sending something
 	{
@@ -642,9 +612,9 @@ GCodeResult LedStripDriver::SetColours(GCodeBuffer& gb, const StringRef& reply) 
 
 # if USE_16BIT_SPI
 			// Swap bytes for 16-bit SPI
-			const uint32_t data = ((brightness & 0xF8) << 5) | (0xE0 << 8) | ((blue & 255)) | ((green & 255) << 24) | ((red & 255) << 16);
+			const uint32_t data = ((brightness << 5) | (0xE0 << 8)) | ((blue & 255)) | ((green & 255) << 24) | ((red & 255) << 16);
 # else
-			const uint32_t data = (brightness >> 3) | 0xE0 | ((blue & 255) << 8) | ((green & 255) << 16) | ((red & 255) << 24);
+			const uint32_t data = ((brightness >> 3) | 0xE0) | ((blue & 255) << 8) | ((green & 255) << 16) | ((red & 255) << 24);
 # endif
 			return SendDotStarData(data, numLeds, following);
 		}
@@ -669,6 +639,12 @@ GCodeResult LedStripDriver::SetColours(GCodeBuffer& gb, const StringRef& reply) 
 	case LedType::neopixelRGBBitBang:
 	case LedType::neopixelRGBWBitBang:
 #if SUPPORT_BITBANG_NEOPIXEL
+		// Interrupts are disabled while bit-banging the data, so make sure movement has stopped
+		if (!reprap.GetGCodes().LockMovementAndWaitForStandstill(gb))
+		{
+			return GCodeResult::notFinished;
+		}
+
 		// Scale RGB by the brightness
 		return BitBangNeoPixelData(	(uint8_t)((red * brightness + 255) >> 8),
 									(uint8_t)((green * brightness + 255) >> 8),

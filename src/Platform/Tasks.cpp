@@ -30,6 +30,9 @@
 
 const uint8_t memPattern = 0xA5;		// this must be the same pattern as FreeRTOS because we use common code for checking for stack overflow
 
+extern char _end;						// defined in linker script
+extern char _estack;					// defined in linker script
+
 // Define replacement standard library functions
 #include <syscalls.h>
 
@@ -81,6 +84,7 @@ extern "C" void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuf
 // Mutexes
 static Mutex i2cMutex;
 static Mutex mallocMutex;
+static Mutex filamentsMutex;
 
 // We need to make malloc/free thread safe. We must use a recursive mutex for it.
 extern "C" void GetMallocMutex() noexcept
@@ -127,10 +131,7 @@ void *Tasks::GetNVMBuffer(const uint32_t *stk) noexcept
 // Application entry point
 [[noreturn]] void AppMain() noexcept
 {
-	pinMode(DiagPin, (DiagOnPolarity) ? OUTPUT_LOW : OUTPUT_HIGH);			// set up status LED for debugging and turn it off
-#if defined(DUET3MINI) || defined(DUET3_MB6XD)
-	pinMode(ActLedPin, (ActOnPolarity) ? OUTPUT_LOW : OUTPUT_HIGH);			// set up activity LED and turn it off
-#endif
+	pinMode(DiagPin, (DiagOnPolarity) ? OUTPUT_LOW : OUTPUT_HIGH);	// set up diag LED for debugging and turn it off
 
 #if !defined(DEBUG) && !defined(__LPC17xx__)	// don't check the CRC of a debug build because debugger breakpoints mess up the CRC
 	// Check the integrity of the firmware by checking the firmware CRC
@@ -155,8 +156,8 @@ void *Tasks::GetNVMBuffer(const uint32_t *stk) noexcept
 #endif	// !defined(DEBUG) && !defined(__LPC17xx__)
 
 	// Fill the free memory with a pattern so that we can check for stack usage and memory corruption
-	char *_ecv_array heapend = heapTop;
-	const char *_ecv_array stack_ptr = (const char*_ecv_array)GetStackPointer();
+	char* heapend = heapTop;
+	register const char * stack_ptr asm ("sp");
 	while (heapend + 16 < stack_ptr)
 	{
 		*heapend++ = memPattern;
@@ -180,7 +181,7 @@ void *Tasks::GetNVMBuffer(const uint32_t *stk) noexcept
 
 				// If we reset immediately then the user area write doesn't complete and the bits get set to all 1s.
 				delayMicroseconds(10000);
-				ResetProcessor();
+				Reset();
 			}
 		}
 	}
@@ -221,6 +222,7 @@ void *Tasks::GetNVMBuffer(const uint32_t *stk) noexcept
 	// Create the mutexes and the startup task
 	mallocMutex.Create("Malloc");
 	i2cMutex.Create("I2C");
+	filamentsMutex.Create("Filaments");
 	mainTask.Create(MainTask, "MAIN", nullptr, TaskPriority::SpinPriority);
 
 	StepTimer::Init();				// initialise the step pulse timer now because we use it for measuring task CPU usage
@@ -244,7 +246,7 @@ extern "C" [[noreturn]] void MainTask(void *pvParameters) noexcept
 // Return the amount of free handler stack space. It may be negative if the stack has overflowed into the area reserved for the heap.
 static ptrdiff_t GetHandlerFreeStack() noexcept
 {
-	const char * const ramend = (const char*)&_estack;
+	const char * const ramend = &_estack;
 	const char * stack_lwm = sysStackLimit;
 	while (stack_lwm < ramend && *stack_lwm == memPattern)
 	{
@@ -392,6 +394,11 @@ void Tasks::TerminateMainTask() noexcept
 Mutex *Tasks::GetI2CMutex() noexcept
 {
 	return &i2cMutex;
+}
+
+Mutex *Tasks::GetFilamentsMutex() noexcept
+{
+	return &filamentsMutex;
 }
 
 // This intercepts the 1ms system tick

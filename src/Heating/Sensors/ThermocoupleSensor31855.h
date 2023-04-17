@@ -10,8 +10,6 @@
 
 #include "SpiTemperatureSensor.h"
 
-#if SUPPORT_SPI_SENSORS
-
 class ThermocoupleSensor31855 : public SpiTemperatureSensor
 {
 public:
@@ -30,7 +28,5 @@ public:
 private:
 	GCodeResult FinishConfiguring(bool changed, const StringRef& reply) noexcept;
 };
-
-#endif // SUPPORT_SPI_SENSORS
 
 #endif /* SRC_HEATING_THERMOCOUPLESENSOR31855_H_ */

@@ -10,6 +10,7 @@
 
 #ifndef PCCB
 # include <AsyncSerial.h>
+typedef AsyncSerial UARTClass;
 # include <USARTClass.h>
 
 extern AsyncSerial Serial;

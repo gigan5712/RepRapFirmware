@@ -1,5 +1,5 @@
 /*
- * FilamentMonitor.h
+ * FilamentSensor.h
  *
  *  Created on: 20 Jul 2017
  *      Author: David
@@ -12,17 +12,24 @@
 #include <Hardware/IoPorts.h>
 #include <ObjectModel/ObjectModel.h>
 #include <RTOSIface/RTOSIface.h>
-#include <RRF3Common.h>
 
-#if SUPPORT_CAN_EXPANSION
-struct CanMessageFilamentMonitorsStatus;
+#if defined(DUET3) || defined(DUET3MINI)
+# include <Duet3Common.h>
+#else
+# include <General/NamedEnum.h>
+NamedEnum(FilamentSensorStatus, uint8_t,
+	noMonitor,
+	ok,
+	noDataReceived,
+	noFilament,
+	tooLittleMovement,
+	tooMuchMovement,
+	sensorError
+);
 #endif
 
-#if SUPPORT_REMOTE_COMMANDS
-struct CanMessageCreateFilamentMonitor;
-struct CanMessageDeleteFilamentMonitor;
-struct CanMessageGeneric;
-class CanMessageGenericParser;
+#if SUPPORT_CAN_EXPANSION
+class CanMessageFilamentMonitorsStatus;
 #endif
 
 class FilamentMonitor INHERIT_OBJECT_MODEL
@@ -32,11 +39,6 @@ public:
 
 	// Configure this sensor, returning true if error and setting 'seen' if we processed any configuration parameters
 	virtual GCodeResult Configure(GCodeBuffer& gb, const StringRef& reply, bool& seen) THROWS(GCodeException) = 0;
-
-#if SUPPORT_REMOTE_COMMANDS
-	// Configure this sensor, returning an error code and setting 'seen' if we processed any configuration parameters
-	virtual GCodeResult Configure(const CanMessageGenericParser& parser, const StringRef& reply) noexcept = 0;
-#endif
 
 	// Call the following at intervals to check the status. This is only called when extrusion is in progress or imminent.
 	// 'filamentConsumed' is the net amount of extrusion since the last call to this function.
@@ -61,7 +63,7 @@ public:
 	unsigned int GetType() const noexcept { return type; }
 
 	// Check that this monitor still refers to a valid extruder
-	bool IsValid(size_t extruderNumber) const noexcept;
+	bool IsValid() const noexcept;
 
 	// Get the status of the filament monitor as a string
 	const char *GetStatusText() const noexcept { return lastStatus.ToString(); }
@@ -97,30 +99,13 @@ public:
 	static void UpdateRemoteFilamentStatus(CanAddress src, CanMessageFilamentMonitorsStatus& msg) noexcept;
 #endif
 
-#if SUPPORT_REMOTE_COMMANDS
-	// Create a new filament monitor, or replace an existing one
-	static GCodeResult Create(const CanMessageCreateFilamentMonitor& msg, const StringRef& reply) noexcept;
-
-	// Delete a filament monitor
-	static GCodeResult Delete(const CanMessageDeleteFilamentMonitor& msg, const StringRef& reply) noexcept;
-
-	// Configure a filament monitor
-	static GCodeResult Configure(const CanMessageGeneric& msg, const StringRef& reply) noexcept;
-
-	// Delete all filament monitors
-	static void DeleteAll() noexcept;
-#endif
-
 	// This must be public so that the array descriptor in class RepRap can lock it
 	static ReadWriteLock filamentMonitorsLock;
 
 protected:
-	FilamentMonitor(unsigned int drv, unsigned int monitorType, DriverId did) noexcept;
+	FilamentMonitor(unsigned int extruder, unsigned int t) noexcept;
 
 	GCodeResult CommonConfigure(GCodeBuffer& gb, const StringRef& reply, InterruptMode interruptMode, bool& seen) THROWS(GCodeException);
-#if SUPPORT_REMOTE_COMMANDS
-	GCodeResult CommonConfigure(const CanMessageGenericParser& parser, const StringRef& reply, InterruptMode interruptMode, bool& seen) noexcept;
-#endif
 
 	const IoPort& GetPort() const noexcept { return port; }
 	bool HaveIsrStepsCommanded() const noexcept { return haveIsrStepsCommanded; }
@@ -130,7 +115,7 @@ protected:
 		return lrintf(100 * f);
 	}
 
-	bool IsLocal() const noexcept { return driverId.IsLocal(); }
+	bool IsLocal() const noexcept { return driver.IsLocal(); }
 
 private:
 
@@ -138,33 +123,19 @@ private:
 	static FilamentMonitor *Create(unsigned int extruder, unsigned int monitorType, GCodeBuffer& gb, const StringRef& reply) noexcept;
 	static void InterruptEntry(CallbackParameter param) noexcept;
 
-	static constexpr size_t NumFilamentMonitors =
-#if SUPPORT_REMOTE_COMMANDS
-	// When running as an expansion board, filament monitors are indexed by driver number; otherwise they are indexed by extruder number.
-								max<size_t>(MaxExtruders, NumDirectDrivers);
-#else
-								MaxExtruders;
-#endif
-
-	static FilamentMonitor *filamentSensors[NumFilamentMonitors];
-
-#if SUPPORT_REMOTE_COMMANDS
-	static constexpr uint32_t StatusUpdateInterval = 2000;				// how often we send status reports when there isn't a change
-	static uint32_t whenStatusLastSent;
-#endif
+	static FilamentMonitor *filamentSensors[MaxExtruders];
 
 	int32_t isrExtruderStepsCommanded;
 	uint32_t lastIsrMillis;
-	unsigned int driveNumber;
+	unsigned int extruderNumber;
 	unsigned int type;
 	IoPort port;
-	DriverId driverId;
+	DriverId driver;
 
 	bool isrWasPrinting;
 	bool haveIsrStepsCommanded;
 	FilamentSensorStatus lastStatus;
 #if SUPPORT_CAN_EXPANSION
-	FilamentSensorStatus lastRemoteStatus;
 	bool hasRemote;
 #endif
 };

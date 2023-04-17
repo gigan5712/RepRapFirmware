@@ -21,7 +21,6 @@
 #include "Fans/FansManager.h"
 #include <Hardware/SoftwareReset.h>
 #include <Hardware/ExceptionHandlers.h>
-#include <Accelerometers/Accelerometers.h>
 #include "Version.h"
 
 #ifdef DUET_NG
@@ -46,8 +45,8 @@
 # include "Display/Display.h"
 #endif
 
-#if HAS_SBC_INTERFACE
-# include "SBC/SbcInterface.h"
+#if HAS_LINUX_INTERFACE
+# include "Linux/LinuxInterface.h"
 #endif
 
 #ifdef DUET3_ATE
@@ -87,8 +86,7 @@ static_assert(CONF_HSMCI_XDMAC_CHANNEL == DmacChanHsmci, "mismatched DMA channel
 // We call vTaskNotifyGiveFromISR from various interrupts, so the following must be true
 static_assert(configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY <= NvicPriorityHSMCI, "configMAX_SYSCALL_INTERRUPT_PRIORITY is set too high");
 
-// This is the string that identifies the board type and firmware version, that the vector at 0x20 points to.
-// The characters after the last space must be the firmware version in standard format, e.g. "3.3.0" or "3.4.0beta4". The firmware build date/time is not included.
+// Builds that use CoreN2G now need a version string. Eventually, all builds of RRF3 will use CoreN2G.
 extern const char VersionText[] = FIRMWARE_NAME " version " VERSION;
 
 #if HAS_HIGH_SPEED_SD && !SAME5x										// SAME5x uses CoreN2G which makes its own RTOS calls
@@ -238,7 +236,7 @@ constexpr ObjectModelArrayDescriptor RepRap::volumesArrayDescriptor =
 constexpr ObjectModelArrayDescriptor RepRap::volChangesArrayDescriptor =
 {
 	nullptr,
-	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t { return MassStorage::GetNumVolumes(); },
+	[] (const ObjectModel *self, const ObjectExplorationContext&) noexcept -> size_t { return NumSdCards; },
 	[] (const ObjectModel *self, ObjectExplorationContext& context) noexcept -> ExpressionValue
 																		{ return ExpressionValue((int32_t)MassStorage::GetVolumeSeq(context.GetLastIndex())); }
 };
@@ -249,7 +247,7 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 	// Within each group, these entries must be in alphabetical order
 	// 0. MachineModel root
 	{ "boards",					OBJECT_MODEL_FUNC_NOSELF(&boardsArrayDescriptor),						ObjectModelEntryFlags::live },
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	{ "directories",			OBJECT_MODEL_FUNC(self, 1),												ObjectModelEntryFlags::none },
 #endif
 	{ "fans",					OBJECT_MODEL_FUNC_NOSELF(&fansArrayDescriptor),							ObjectModelEntryFlags::live },
@@ -272,15 +270,15 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 	{ "volumes",				OBJECT_MODEL_FUNC_NOSELF(&volumesArrayDescriptor),						ObjectModelEntryFlags::none },
 
 	// 1. MachineModel.directories
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	{ "filaments",				OBJECT_MODEL_FUNC_NOSELF(FILAMENTS_DIRECTORY),							ObjectModelEntryFlags::verbose },
 	{ "firmware",				OBJECT_MODEL_FUNC_NOSELF(FIRMWARE_DIRECTORY),							ObjectModelEntryFlags::verbose },
-	{ "gCodes",					OBJECT_MODEL_FUNC_NOSELF(Platform::GetGCodeDir()),						ObjectModelEntryFlags::verbose },
-	{ "macros",					OBJECT_MODEL_FUNC_NOSELF(Platform::GetMacroDir()),						ObjectModelEntryFlags::verbose },
+	{ "gCodes",					OBJECT_MODEL_FUNC(self->platform->GetGCodeDir()),						ObjectModelEntryFlags::verbose },
+	{ "macros",					OBJECT_MODEL_FUNC(self->platform->GetMacroDir()),						ObjectModelEntryFlags::verbose },
 	{ "menu",					OBJECT_MODEL_FUNC_NOSELF(MENU_DIR),										ObjectModelEntryFlags::verbose },
 	{ "scans",					OBJECT_MODEL_FUNC_NOSELF(SCANS_DIRECTORY),								ObjectModelEntryFlags::verbose },
 	{ "system",					OBJECT_MODEL_FUNC_NOSELF(ExpressionValue::SpecialType::sysDir, 0),		ObjectModelEntryFlags::none },
-	{ "web",					OBJECT_MODEL_FUNC_NOSELF(Platform::GetWebDir()),						ObjectModelEntryFlags::verbose },
+	{ "web",					OBJECT_MODEL_FUNC(self->platform->GetWebDir()),							ObjectModelEntryFlags::verbose },
 #endif
 
 	// 2. MachineModel.limits
@@ -313,8 +311,9 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 	{ "tools",					OBJECT_MODEL_FUNC_NOSELF((int32_t)MaxTools),							ObjectModelEntryFlags::verbose },
 	{ "trackedObjects",			OBJECT_MODEL_FUNC_NOSELF((int32_t)MaxTrackedObjects),					ObjectModelEntryFlags::verbose },
 	{ "triggers",				OBJECT_MODEL_FUNC_NOSELF((int32_t)MaxTriggers),							ObjectModelEntryFlags::verbose },
+	// TODO userVariables
 #if HAS_MASS_STORAGE
-	{ "volumes",				OBJECT_MODEL_FUNC_NOSELF((int32_t)MassStorage::GetNumVolumes()),		ObjectModelEntryFlags::verbose },
+	{ "volumes",				OBJECT_MODEL_FUNC_NOSELF((int32_t)NumSdCards),							ObjectModelEntryFlags::verbose },
 #else
 	{ "volumes",				OBJECT_MODEL_FUNC_NOSELF((int32_t)0),									ObjectModelEntryFlags::verbose },
 #endif
@@ -323,11 +322,9 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 	{ "zProbes",				OBJECT_MODEL_FUNC_NOSELF((int32_t)MaxZProbes),							ObjectModelEntryFlags::verbose },
 
 	// 3. MachineModel.state
-	{ "atxPower",				OBJECT_MODEL_FUNC_IF(self->platform->IsAtxPowerControlled(), self->platform->GetAtxPowerState()),	ObjectModelEntryFlags::none },
-	{ "atxPowerPort",			OBJECT_MODEL_FUNC_IF(self->platform->IsAtxPowerControlled(), self->platform->GetAtxPowerPort()),	ObjectModelEntryFlags::none },
+	{ "atxPower",				OBJECT_MODEL_FUNC_IF(self->gCodes->AtxPowerControlled(), self->platform->AtxPower()),	ObjectModelEntryFlags::live },
 	{ "beep",					OBJECT_MODEL_FUNC_IF(self->beepDuration != 0, self, 4),					ObjectModelEntryFlags::none },
 	{ "currentTool",			OBJECT_MODEL_FUNC((int32_t)self->GetCurrentToolNumber()),				ObjectModelEntryFlags::live },
-	{ "deferredPowerDown",		OBJECT_MODEL_FUNC_IF(self->platform->IsAtxPowerControlled(), self->platform->IsDeferredPowerDown()),	ObjectModelEntryFlags::none },
 	{ "displayMessage",			OBJECT_MODEL_FUNC(self->message.c_str()),								ObjectModelEntryFlags::none },
 	{ "gpOut",					OBJECT_MODEL_FUNC_NOSELF(&gpoutArrayDescriptor),						ObjectModelEntryFlags::live },
 #if SUPPORT_LASER
@@ -341,17 +338,15 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 #endif
 	{ "logLevel",				OBJECT_MODEL_FUNC(self->platform->GetLogLevel()),						ObjectModelEntryFlags::none },
 	{ "machineMode",			OBJECT_MODEL_FUNC(self->gCodes->GetMachineModeString()),				ObjectModelEntryFlags::none },
-	{ "macroRestarted",			OBJECT_MODEL_FUNC(self->gCodes->GetMacroRestarted()),					ObjectModelEntryFlags::none },
-	{ "messageBox",				OBJECT_MODEL_FUNC_IF(self->mbox.active, self, 5),						ObjectModelEntryFlags::important },
+	{ "messageBox",				OBJECT_MODEL_FUNC_IF(self->mbox.active, self, 5),						ObjectModelEntryFlags::none },
 	{ "msUpTime",				OBJECT_MODEL_FUNC_NOSELF((int32_t)(context.GetStartMillis() % 1000u)),	ObjectModelEntryFlags::live },
-	{ "nextTool",				OBJECT_MODEL_FUNC((int32_t)self->gCodes->GetNewToolNumber()),			ObjectModelEntryFlags::none },
+	{ "nextTool",				OBJECT_MODEL_FUNC((int32_t)self->gCodes->GetNewToolNumber()),			ObjectModelEntryFlags::live },
 #if HAS_VOLTAGE_MONITOR
 	{ "powerFailScript",		OBJECT_MODEL_FUNC(self->gCodes->GetPowerFailScript()),					ObjectModelEntryFlags::none },
 #endif
-	{ "previousTool",			OBJECT_MODEL_FUNC((int32_t)self->previousToolNumber),					ObjectModelEntryFlags::none },
+	{ "previousTool",			OBJECT_MODEL_FUNC((int32_t)self->previousToolNumber),					ObjectModelEntryFlags::live },
 	{ "restorePoints",			OBJECT_MODEL_FUNC_NOSELF(&restorePointsArrayDescriptor),				ObjectModelEntryFlags::none },
 	{ "status",					OBJECT_MODEL_FUNC(self->GetStatusString()),								ObjectModelEntryFlags::live },
-	{ "thisInput",				OBJECT_MODEL_FUNC_IF_NOSELF(context.GetGCodeBuffer() != nullptr, (int32_t)context.GetGCodeBuffer()->GetChannel().ToBaseType()),	ObjectModelEntryFlags::verbose },
 	{ "time",					OBJECT_MODEL_FUNC(DateTime(self->platform->GetDateTime())),				ObjectModelEntryFlags::live },
 	{ "upTime",					OBJECT_MODEL_FUNC_NOSELF((int32_t)((context.GetStartMillis()/1000u) & 0x7FFFFFFF)),	ObjectModelEntryFlags::live },
 
@@ -360,16 +355,16 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 	{ "frequency",				OBJECT_MODEL_FUNC((int32_t)self->beepFrequency),						ObjectModelEntryFlags::none },
 
 	// 5. MachineModel.state.messageBox (FIXME acquire MutexLocker when accessing the following)
-	{ "axisControls",			OBJECT_MODEL_FUNC((int32_t)self->mbox.controls.GetRaw()),				ObjectModelEntryFlags::important },
-	{ "message",				OBJECT_MODEL_FUNC(self->mbox.message.c_str()),							ObjectModelEntryFlags::important },
-	{ "mode",					OBJECT_MODEL_FUNC((int32_t)self->mbox.mode),							ObjectModelEntryFlags::important },
-	{ "seq",					OBJECT_MODEL_FUNC((int32_t)self->mbox.seq),								ObjectModelEntryFlags::important },
-	{ "timeout",				OBJECT_MODEL_FUNC((int32_t)self->mbox.timeout),							ObjectModelEntryFlags::important },
-	{ "title",					OBJECT_MODEL_FUNC(self->mbox.title.c_str()),							ObjectModelEntryFlags::important },
+	{ "axisControls",			OBJECT_MODEL_FUNC((int32_t)self->mbox.controls.GetRaw()),				ObjectModelEntryFlags::none },
+	{ "message",				OBJECT_MODEL_FUNC(self->mbox.message.c_str()),							ObjectModelEntryFlags::none },
+	{ "mode",					OBJECT_MODEL_FUNC((int32_t)self->mbox.mode),							ObjectModelEntryFlags::none },
+	{ "seq",					OBJECT_MODEL_FUNC((int32_t)self->mbox.seq),								ObjectModelEntryFlags::none },
+	{ "timeout",				OBJECT_MODEL_FUNC((int32_t)self->mbox.timeout),							ObjectModelEntryFlags::none },
+	{ "title",					OBJECT_MODEL_FUNC(self->mbox.title.c_str()),							ObjectModelEntryFlags::none },
 
 	// 6. MachineModel.seqs
 	{ "boards",					OBJECT_MODEL_FUNC((int32_t)self->boardsSeq),							ObjectModelEntryFlags::live },
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	{ "directories",			OBJECT_MODEL_FUNC((int32_t)self->directoriesSeq),						ObjectModelEntryFlags::live },
 #endif
 	{ "fans",					OBJECT_MODEL_FUNC((int32_t)self->fansSeq),								ObjectModelEntryFlags::live },
@@ -399,19 +394,18 @@ constexpr ObjectModelTableEntry RepRap::objectModelTable[] =
 
 constexpr uint8_t RepRap::objectModelTableDescriptor[] =
 {
-	7,																						// number of sub-tables
-	15 + SUPPORT_SCANNER + (HAS_MASS_STORAGE | HAS_EMBEDDED_FILES | HAS_SBC_INTERFACE),		// root
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES || HAS_SBC_INTERFACE
-	8, 																						// directories
+	7,																		// number of sub-tables
+	15 + SUPPORT_SCANNER + HAS_MASS_STORAGE,								// root
+#if HAS_MASS_STORAGE
+	8, 																		// directories
 #else
-	0,																						// directories
+	0,																		// directories
 #endif
-	25,																						// limits
-	20 + HAS_VOLTAGE_MONITOR + SUPPORT_LASER,												// state
-	2,																						// state.beep
-	6,																						// state.messageBox
-	12 + HAS_NETWORKING + SUPPORT_SCANNER +
-	2 * HAS_MASS_STORAGE + (HAS_MASS_STORAGE | HAS_EMBEDDED_FILES | HAS_SBC_INTERFACE)		// seqs
+	25,																		// limits
+	16 + HAS_VOLTAGE_MONITOR + SUPPORT_LASER,								// state
+	2,																		// state.beep
+	6,																		// state.messageBox
+	12 + HAS_NETWORKING + SUPPORT_SCANNER + 3 * HAS_MASS_STORAGE			// seqs
 };
 
 DEFINE_GET_OBJECT_MODEL_TABLE(RepRap)
@@ -434,8 +428,8 @@ RepRap::RepRap() noexcept
 	  previousToolNumber(-1),
 	  diagnosticsDestination(MessageType::NoDestinationMessage), justSentDiagnostics(false),
 	  spinningModule(noModule), stopped(false), active(false), processingConfig(true)
-#if HAS_SBC_INTERFACE
-	  , usingSbcInterface(false)						// default to not using the SBC interface until we have checked for config.g on an SD card,
+#if HAS_LINUX_INTERFACE
+	  , usingLinuxInterface(false)						// default to not using the SBC interface until we have checked for config.g on an SD card,
 														// because a disconnected SBC interface can generate noise which may trigger interrupts and DMA
 #endif
 {
@@ -475,8 +469,8 @@ void RepRap::Init() noexcept
 {
 	OutputBuffer::Init();
 	platform = new Platform();
-#if HAS_SBC_INTERFACE
-	sbcInterface = new SbcInterface();				// needs to be allocated early on Duet 2 so as to avoid using any of the last 64K of RAM
+#if HAS_LINUX_INTERFACE
+	linuxInterface = new LinuxInterface();				// needs to be allocated early on Duet 2 so as to avoid using any of the last 64K of RAM
 #endif
 	network = new Network(*platform);
 	gCodes = new GCodes(*platform);
@@ -537,7 +531,7 @@ void RepRap::Init() noexcept
 #ifdef DUET3_ATE
 	Duet3Ate::Init();
 #endif
-	// sbcInterface is not initialised until we know we are using it, to prevent a disconnected SBC interface generating interrupts and DMA
+	// linuxInterface is not initialised until we know we are using it, to prevent a disconnected SBC interface generating interrupts and DMA
 
 	// Set up the timeout of the regular watchdog, and set up the backup watchdog if there is one.
 #if SAME5x
@@ -587,13 +581,12 @@ void RepRap::Init() noexcept
 
 	platform->MessageF(UsbMessage, "%s\n", VersionText);
 
-#if HAS_SBC_INTERFACE && !HAS_MASS_STORAGE
-	usingSbcInterface = true;
-	sbcInterface->Init();
-	FileWriteBuffer::UsingSbcMode();
+#if HAS_LINUX_INTERFACE && !HAS_MASS_STORAGE
+	linuxInterface->Init();
+	usingLinuxInterface = true;
 #endif
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	{
 		// Try to mount the first SD card
 		GCodeResult rslt;
@@ -607,42 +600,40 @@ void RepRap::Init() noexcept
 
 		if (rslt == GCodeResult::ok)
 		{
+# if HAS_LINUX_INTERFACE
+			delete linuxInterface;						// free up the RAM for more tools etc.
+			linuxInterface = nullptr;
+# endif
 			// Run the configuration file
 			if (!RunStartupFile(GCodes::CONFIG_FILE) && !RunStartupFile(GCodes::CONFIG_BACKUP_FILE))
 			{
 				platform->Message(AddWarning(UsbMessage), "no configuration file found\n");
 			}
 		}
-# if HAS_SBC_INTERFACE
+# if HAS_LINUX_INTERFACE
 		else if (!MassStorage::IsCardDetected(0))		// if we failed to mount the SD card because there was no card in the slot
 		{
-			usingSbcInterface = true;
-			FileWriteBuffer::UsingSbcMode();
+			linuxInterface->Init();
+			usingLinuxInterface = true;
 		}
 # endif
 		else
 		{
+# if HAS_LINUX_INTERFACE
+			delete linuxInterface;						// free up the RAM for more tools etc.
+			linuxInterface = nullptr;
+# endif
 			delay(3000);								// Wait a few seconds so users have a chance to see this
 			platform->MessageF(AddWarning(UsbMessage), "%s\n", reply.c_str());
 		}
-# if HAS_SBC_INTERFACE
-		sbcInterface->Init();
-# endif
 	}
-#elif defined(DUET_NG)
-	// It's the SBC build of Duet 2 firmware. Enable the PanelDue port so that the ATE can test it.
-	platform->SetBaudRate(1, 57600);
-	platform->SetCommsProperties(1, 1);
-	gCodes->SetAux0CommsProperties(1);
-	platform->SetAuxRaw(0, false);
-	platform->EnableAux(0);
 #endif
 
-#if HAS_SBC_INTERFACE
-	if (usingSbcInterface)
+#if HAS_LINUX_INTERFACE
+	if (usingLinuxInterface)
 	{
 		// Keep spinning until the SBC connects
-		while (!sbcInterface->IsConnected())
+		while (!linuxInterface->IsConnected())
 		{
 			Spin();
 		}
@@ -724,9 +715,6 @@ void RepRap::Exit() noexcept
 #endif
 	network->Exit();
 	platform->Exit();
-#if SUPPORT_ACCELEROMETERS
-	Accelerometers::Exit();
-#endif
 }
 
 void RepRap::Spin() noexcept
@@ -770,16 +758,6 @@ void RepRap::Spin() noexcept
 	ticksInSpinState = 0;
 	spinningModule = moduleDisplay;
 	display->Spin();
-#endif
-
-#if HAS_SBC_INTERFACE
-	// Keep the SBC task spinning from the main task in standalone mode to respond to a SBC if necessary
-	if (!UsingSbcInterface())
-	{
-		ticksInSpinState = 0;
-		spinningModule = moduleSbcInterface;
-		sbcInterface->Spin();
-	}
 #endif
 
 	ticksInSpinState = 0;
@@ -855,7 +833,7 @@ void RepRap::Spin() noexcept
 
 void RepRap::Timing(MessageType mtype) noexcept
 {
-	platform->MessageF(mtype, "Slowest loop: %.2fms; fastest: %.2fms\n", (double)(slowLoop * StepClocksToMillis), (double)(fastLoop * StepClocksToMillis));
+	platform->MessageF(mtype, "Slowest loop: %.2fms; fastest: %.2fms\n", (double)(slowLoop * StepTimer::StepClocksToMillis), (double)(fastLoop * StepTimer::StepClocksToMillis));
 	fastLoop = UINT32_MAX;
 	slowLoop = 0;
 }
@@ -883,7 +861,7 @@ void RepRap::Diagnostics(MessageType mtype) noexcept
 #ifdef __LPC17xx__
 		" at %uMhz"										// clock speed
 #endif
-#if HAS_SBC_INTERFACE || SUPPORT_REMOTE_COMMANDS
+#if HAS_LINUX_INTERFACE || SUPPORT_REMOTE_COMMANDS
 		" (%s mode)"									// standalone, SBC or expansion mode
 #endif
 		"\n",
@@ -901,13 +879,13 @@ void RepRap::Diagnostics(MessageType mtype) noexcept
 #ifdef __LPC17xx__
 		, (unsigned int)(SystemCoreClock/1000000)
 #endif
-#if HAS_SBC_INTERFACE || SUPPORT_REMOTE_COMMANDS
+#if HAS_LINUX_INTERFACE || SUPPORT_REMOTE_COMMANDS
 		,
 # if SUPPORT_REMOTE_COMMANDS
 						(CanInterface::InExpansionMode()) ? "expansion" :
 # endif
-# if HAS_SBC_INTERFACE
-						(UsingSbcInterface()) ? "SBC" :
+# if HAS_LINUX_INTERFACE
+						(UsingLinuxInterface()) ? "SBC" :
 # endif
 							"standalone"
 #endif
@@ -918,11 +896,7 @@ void RepRap::Diagnostics(MessageType mtype) noexcept
 	//						(uint32_t)platform, (uint32_t)network, (uint32_t)move, (uint32_t)heat, (uint32_t)gCodes, (uint32_t)scanner, (uint32_t)printMonitor, (uint32_t)portControl);
 
 #if MCU_HAS_UNIQUE_ID
-	{
-		String<StringLength50> idChars;
-		platform->GetUniqueId().AppendCharsToString(idChars.GetRef());
-		platform->MessageF(mtype, "Board ID: %s\n", idChars.c_str());
-	}
+	platform->MessageF(mtype, "Board ID: %s\n", platform->GetUniqueIdString());
 #endif
 
 	// Show the used and free buffer counts. Do this early in case we are running out of them and the diagnostics get truncated.
@@ -931,7 +905,7 @@ void RepRap::Diagnostics(MessageType mtype) noexcept
 	// Now print diagnostics for other modules
 	Tasks::Diagnostics(mtype);
 	platform->Diagnostics(mtype);				// this includes a call to our Timing() function
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	MassStorage::Diagnostics(mtype);
 #endif
 	move->Diagnostics(mtype);
@@ -944,10 +918,10 @@ void RepRap::Diagnostics(MessageType mtype) noexcept
 #if SUPPORT_CAN_EXPANSION
 	CanInterface::Diagnostics(mtype);
 #endif
-#if HAS_SBC_INTERFACE
-	if (usingSbcInterface)
+#if HAS_LINUX_INTERFACE
+	if (usingLinuxInterface)
 	{
-		sbcInterface->Diagnostics(mtype);
+		linuxInterface->Diagnostics(mtype);
 	}
 	else
 #endif
@@ -965,12 +939,10 @@ void RepRap::EmergencyStop() noexcept
 	Duet3Ate::PowerOffEUT();
 #endif
 
-	stopped = true;								// a useful side effect of setting this is that it prevents Platform::Tick being called, which is needed when loading IAP into RAM
+	stopped = true;				// a useful side effect of setting this is that it prevents Platform::Tick being called, which is needed when loading IAP into RAM
 
 	// Do not turn off ATX power here. If the nozzles are still hot, don't risk melting any surrounding parts by turning fans off.
 	//platform->SetAtxPower(false);
-
-	platform->DisableAllDrivers();				// need to do this to ensure that any motor brakes are re-engaged
 
 	switch (gCodes->GetMachineType())
 	{
@@ -1054,6 +1026,7 @@ void RepRap::AddTool(Tool* tool) noexcept
 	tool->next = *t;
 	*t = tool;
 	tool->UpdateExtruderAndHeaterCount(activeExtruders, activeToolHeaters, numToolsToReport);
+	platform->UpdateConfiguredHeaters();
 	ToolsUpdated();
 }
 
@@ -1079,7 +1052,7 @@ void RepRap::DeleteTool(int toolNumber) noexcept
 			// Switch off any associated heaters
 			for (size_t i = 0; i < tool->HeaterCount(); i++)
 			{
-				heat->SwitchOff(tool->GetHeater(i));
+				heat->SwitchOff(tool->Heater(i));
 			}
 
 			break;
@@ -1095,6 +1068,7 @@ void RepRap::DeleteTool(int toolNumber) noexcept
 	{
 		t->UpdateExtruderAndHeaterCount(activeExtruders, activeToolHeaters, numToolsToReport);
 	}
+	platform->UpdateConfiguredHeaters();
 	ToolsUpdated();
 }
 
@@ -1102,15 +1076,18 @@ void RepRap::DeleteTool(int toolNumber) noexcept
 void RepRap::SelectTool(int toolNumber, bool simulating) noexcept
 {
 	ReadLockedPointer<Tool> const newTool = GetTool(toolNumber);
-	if (!simulating && currentTool != nullptr && currentTool != newTool.Ptr())
+	if (!simulating)
 	{
-		currentTool->Standby();
+		if (currentTool != nullptr && currentTool != newTool.Ptr())
+		{
+			currentTool->Standby();
+		}
+		if (newTool.IsNotNull())
+		{
+			newTool->Activate();
+		}
 	}
-	currentTool = newTool.Ptr();					// must do this first so that Activate() will always work
-	if (!simulating && newTool.IsNotNull())
-	{
-		newTool->Activate();
-	}
+	currentTool = newTool.Ptr();
 }
 
 void RepRap::PrintTool(int toolNumber, const StringRef& reply) const noexcept
@@ -1118,7 +1095,7 @@ void RepRap::PrintTool(int toolNumber, const StringRef& reply) const noexcept
 	ReadLockedPointer<Tool> const tool = GetTool(toolNumber);
 	if (tool.IsNotNull())
 	{
-		tool->PrintTool(reply);
+		tool->Print(reply);
 	}
 	else
 	{
@@ -1196,7 +1173,7 @@ bool RepRap::IsHeaterAssignedToTool(int8_t heater) const noexcept
 	{
 		for (size_t i = 0; i < tool->HeaterCount(); i++)
 		{
-			if (tool->GetHeater(i) == heater)
+			if (tool->Heater(i) == heater)
 			{
 				// It's already in use by some tool
 				return true;
@@ -1240,7 +1217,7 @@ void RepRap::ReportToolTemperatures(const StringRef& reply, const Tool *tool, bo
 		char sep = ':';
 		for (size_t i = 0; i < tool->HeaterCount(); ++i)
 		{
-			const int heater = tool->GetHeater(i);
+			const int heater = tool->Heater(i);
 			reply.catf("%c%.1f /%.1f", sep, (double)heat.GetHeaterTemperature(heater), (double)heat.GetTargetTemperature(heater));
 			sep = ' ';
 		}
@@ -1377,7 +1354,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 	AppendFloatArray(response, "extr", GetExtrudersInUse(), [this](size_t extruder) noexcept { return move->LiveCoordinate(ExtruderToLogicalDrive(extruder), currentTool); }, 1);
 
 	// Current speeds
-	response->catf("},\"speeds\":{\"requested\":%.1f,\"top\":%.1f}", (double)move->GetRequestedSpeedMmPerSec(), (double)move->GetTopSpeedMmPerSec());
+	response->catf("},\"speeds\":{\"requested\":%.1f,\"top\":%.1f}", (double)move->GetRequestedSpeed(), (double)move->GetTopSpeed());
 
 	// Current tool number
 	response->catf(",\"currentTool\":%d", GetCurrentToolNumber());
@@ -1430,7 +1407,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 	}
 
 	// ATX power
-	response->catf(",\"params\":{\"atxPower\":%d", platform->IsAtxPowerControlled() ? (platform->GetAtxPowerState() ? 1 : 0) : -1);
+	response->catf(",\"params\":{\"atxPower\":%d", gCodes->AtxPowerControlled() ? (platform->AtxPower() ? 1 : 0) : -1);
 
 	// Parameters
 	{
@@ -1582,7 +1559,7 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 				first = false;
 				float temp;
 				(void)sensor->GetLatestTemperature(temp);
-				response->catf("{\"name\":\"%.s\",\"temp\":%.1f}", nm, (double)HideNan(temp));
+				response->catf("{\"name\":\"%.s\",\"temp\":%.1f}", nm, HideNan(temp));
 			}
 			nextSensorNumber = sensor->GetSensorNumber() + 1;
 		}
@@ -1686,14 +1663,14 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 #if HAS_MASS_STORAGE
 		// Total and mounted volumes
 		size_t mountedCards = 0;
-		for (size_t i = 0; i < MassStorage::GetNumVolumes(); i++)
+		for (size_t i = 0; i < NumSdCards; i++)
 		{
 			if (MassStorage::IsDriveMounted(i))
 			{
-				mountedCards |= (1u << i);
+				mountedCards |= (1 << i);
 			}
 		}
-		response->catf(",\"volumes\":%u,\"mountedVolumes\":%u", MassStorage::GetNumVolumes(), mountedCards);
+		response->catf(",\"volumes\":%u,\"mountedVolumes\":%u", NumSdCards, mountedCards);
 #endif
 
 		// Machine mode and name
@@ -1723,11 +1700,11 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 				}
 
 				// Heaters
-				AppendIntArray(response, "heaters", tool->HeaterCount(), [tool](size_t heater) noexcept { return tool->GetHeater(heater); });
+				AppendIntArray(response, "heaters", tool->HeaterCount(), [tool](size_t heater) noexcept { return tool->Heater(heater); });
 
 				// Extruder drives
 				response->cat(',');
-				AppendIntArray(response, "drives", tool->DriveCount(), [tool](size_t drive) noexcept { return tool->GetDrive(drive); });
+				AppendIntArray(response, "drives", tool->DriveCount(), [tool](size_t drive) noexcept { return tool->Drive(drive); });
 
 				// Axis mapping
 				response->cat(",\"axisMap\":[[");
@@ -1783,24 +1760,24 @@ OutputBuffer *RepRap::GetStatusResponse(uint8_t type, ResponseSource source) con
 		// MCU temperatures
 #if HAS_CPU_TEMP_SENSOR
 		{
-			const MinCurMax temps = platform->GetMcuTemperatures();
-			response->catf(",\"mcutemp\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)temps.minimum, (double)temps.current, (double)temps.maximum);
+			const MinMaxCurrent temps = platform->GetMcuTemperatures();
+			response->catf(",\"mcutemp\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)temps.min, (double)temps.current, (double)temps.max);
 		}
 #endif
 
 #if HAS_VOLTAGE_MONITOR
 		// Power in voltages
 		{
-			const MinCurMax voltages = platform->GetPowerVoltages();
-			response->catf(",\"vin\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)voltages.minimum, (double)voltages.current, (double)voltages.maximum);
+			const MinMaxCurrent voltages = platform->GetPowerVoltages();
+			response->catf(",\"vin\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)voltages.min, (double)voltages.current, (double)voltages.max);
 		}
 #endif
 
 #if HAS_12V_MONITOR
 		// Power in voltages
 		{
-			const MinCurMax voltages = platform->GetV12Voltages();
-			response->catf(",\"v12\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)voltages.minimum, (double)voltages.current, (double)voltages.maximum);
+			const MinMaxCurrent voltages = platform->GetV12Voltages();
+			response->catf(",\"v12\":{\"min\":%.1f,\"cur\":%.1f,\"max\":%.1f}", (double)voltages.min, (double)voltages.current, (double)voltages.max);
 		}
 #endif
 	}
@@ -1860,7 +1837,7 @@ OutputBuffer *RepRap::GetConfigResponse() noexcept
 
 	// Accelerations
 	response->cat(',');
-	AppendFloatArray(response, "accelerations", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return InverseConvertAcceleration(platform->Acceleration(drive)); }, 2);
+	AppendFloatArray(response, "accelerations", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return platform->Acceleration(drive); }, 2);
 
 	// Motor currents
 	response->cat(',');
@@ -1897,7 +1874,7 @@ OutputBuffer *RepRap::GetConfigResponse() noexcept
 
 	response->catf(",\"firmwareDate\":\"%.s\"", DATE);
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	// System files folder
 	response->catf(", \"sysdir\":\"%.s\"", platform->GetSysDir().Ptr());
 #endif
@@ -1907,11 +1884,11 @@ OutputBuffer *RepRap::GetConfigResponse() noexcept
 	response->catf(",\"idleTimeout\":%.1f,", (double)(move->IdleTimeout()));
 
 	// Minimum feedrates
-	AppendFloatArray(response, "minFeedrates", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return InverseConvertSpeedToMmPerSec(platform->GetInstantDv(drive)); }, 2);
+	AppendFloatArray(response, "minFeedrates", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return platform->GetInstantDv(drive); }, 2);
 
 	// Maximum feedrates
 	response->cat(',');
-	AppendFloatArray(response, "maxFeedrates", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return InverseConvertSpeedToMmPerSec(platform->MaxFeedrate(drive)); }, 2);
+	AppendFloatArray(response, "maxFeedrates", MaxAxesPlusExtruders, [this](size_t drive) noexcept { return platform->MaxFeedrate(drive); }, 2);
 
 	// Config file is no longer included, because we can use rr_configfile or M503 instead
 	response->cat('}');
@@ -2077,20 +2054,14 @@ OutputBuffer *RepRap::GetLegacyStatusResponse(uint8_t type, int seq) const noexc
 	{
 		// Add the static fields
 		response->catf(",\"geometry\":\"%s\",\"axes\":%u,\"totalAxes\":%u,\"axisNames\":\"%s\",\"volumes\":%u,\"numTools\":%u,\"myName\":\"%.s\",\"firmwareName\":\"%.s\"",
-						move->GetGeometryString(), numVisibleAxes, gCodes->GetTotalAxes(), gCodes->GetAxisLetters(),
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
-							MassStorage::GetNumVolumes(),
-#else
-							0,
-#endif
-								GetNumberOfContiguousTools(), myName.c_str(), FIRMWARE_NAME);
+						move->GetGeometryString(), numVisibleAxes, gCodes->GetTotalAxes(), gCodes->GetAxisLetters(), NumSdCards, GetNumberOfContiguousTools(), myName.c_str(), FIRMWARE_NAME);
 	}
 
 	response->cat("}\n");			// include a newline to help PanelDue resync
 	return response;
 }
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 
 // Get the list of files in the specified directory in JSON format. PanelDue uses this one, so include a newline at the end.
 // If flagDirs is true then we prefix each directory with a * character.
@@ -2107,14 +2078,11 @@ OutputBuffer *RepRap::GetFilesResponse(const char *dir, unsigned int startAt, bo
 	unsigned int err;
 	unsigned int nextFile = 0;
 
-#if HAS_MASS_STORAGE
 	if (!MassStorage::CheckDriveMounted(dir))
 	{
 		err = 1;
 	}
-	else
-#endif
-	if (!MassStorage::DirectoryExists(dir))
+	else if (!MassStorage::DirectoryExists(dir))
 	{
 		err = 2;
 	}
@@ -2186,14 +2154,11 @@ OutputBuffer *RepRap::GetFilelistResponse(const char *dir, unsigned int startAt)
 	unsigned int err;
 	unsigned int nextFile = 0;
 
-#if HAS_MASS_STORAGE
 	if (!MassStorage::CheckDriveMounted(dir))
 	{
 		err = 1;
 	}
-	else
-#endif
-	if (!MassStorage::DirectoryExists(dir))
+	else if (!MassStorage::DirectoryExists(dir))
 	{
 		err = 2;
 	}
@@ -2267,128 +2232,18 @@ OutputBuffer *RepRap::GetFilelistResponse(const char *dir, unsigned int startAt)
 
 #endif
 
-#if HAS_MASS_STORAGE
-
-// Get thumbnail data
-// 'offset' is the offset into the file of the thumbnail data that the caller wants.
-// It is up to the caller to get the offset right, however we must fail gracefully if the caller passes us a bad offset.
-// The offset should always be either the initial offset or the 'next' value passed in a previous call, so it should always be the start of a line.
-// 'encapsulateThumbnail' defines whether the thumbnail shall be encapsulated as a "thumbnail" property of the root object
-OutputBuffer *RepRap::GetThumbnailResponse(const char *filename, FilePosition offset, bool forM31point1) noexcept
-{
-	constexpr unsigned int ThumbnailMaxDataSizeM31 = 1024;			// small enough for PanelDue to buffer
-	constexpr unsigned int ThumbnailMaxDataSizeRr = 2600;			// about two TCP messages
-	static_assert(ThumbnailMaxDataSizeM31 % 4 == 0, "must be a multiple of to guarantee base64 alignment");
-	static_assert(ThumbnailMaxDataSizeRr % 4 == 0, "must be a multiple of to guarantee base64 alignment");
-
-	// Need something to write to...
-	OutputBuffer *response;
-	if (!OutputBuffer::Allocate(response))
-	{
-		return nullptr;
-	}
-
-	if (forM31point1)
-	{
-		response->cat("{\"thumbnail\":");
-	}
-	response->catf("{\"fileName\":\"%.s\",\"offset\":%" PRIu32 ",", filename, offset);
-
-	FileStore *const f = platform->OpenFile(Platform::GetGCodeDir(), filename, OpenMode::read);
-	unsigned int err = 0;
-	if (f != nullptr)
-	{
-		if (f->Seek(offset))
-		{
-			response->cat("\"data\":\"");
-
-			const unsigned int thumbnailMaxDataSize = (forM31point1) ? ThumbnailMaxDataSizeM31 : ThumbnailMaxDataSizeRr;
-			for (unsigned int charsWrittenThisCall = 0; charsWrittenThisCall < thumbnailMaxDataSize; )
-			{
-				// Read a line
-				char lineBuffer[MaxGCodeLength];
-				const int charsRead = f->ReadLine(lineBuffer, sizeof(lineBuffer));
-				if (charsRead <= 0)
-				{
-					err = 1;
-					offset = 0;
-					break;
-				}
-
-				const FilePosition posOld = offset;
-				offset = f->Position();
-
-				const char *p = lineBuffer;
-
-				// Skip white spaces
-				while ((p - lineBuffer <= charsRead) && (*p == ';' || *p == ' ' || *p == '\t'))
-				{
-					++p;
-				}
-
-				// Skip empty lines (there shouldn't be any, but just in case there are)
-				if (*p == '\n' || *p == '\0')
-				{
-					continue;
-				}
-
-				// Check for end of thumbnail. We'd like to use a regex here but we can't afford the flash space of a regex parser in some build configurations.
-				if (   StringStartsWith(p, "thumbnail end") || StringStartsWith(p, "thumbnail_QOI end") || StringStartsWith(p, "thumbnail_JPG end")
-					// Also stop if the base64 data has ended, to avoid sending to the end of file if the end marker is missing. We don't want to take too long so just look for space.
-					|| strchr(p, ' ') != nullptr
-				   )
-				{
-					offset = 0;
-					break;
-				}
-
-				const unsigned int charsSkipped = p - lineBuffer;
-				const unsigned int charsAvailable = charsRead - charsSkipped;
-				unsigned int charsWrittenFromThisLine;
-				if (charsAvailable <= thumbnailMaxDataSize - charsWrittenThisCall)
-				{
-					// Write all the data in this line
-					charsWrittenFromThisLine = charsAvailable;
-				}
-				else
-				{
-					// Write just enough characters to fill the buffer
-					charsWrittenFromThisLine = thumbnailMaxDataSize - charsWrittenThisCall;
-					offset = posOld + charsSkipped + charsWrittenFromThisLine;
-				}
-
-				// Copy the data
-				response->cat(p, charsWrittenFromThisLine);
-				charsWrittenThisCall += charsWrittenFromThisLine;
-			}
-
-			response->catf("\",\"next\":%" PRIu32 ",", offset);
-		}
-		f->Close();
-	}
-	else
-	{
-		err = 1;
-	}
-
-	response->catf(forM31point1 ? "\"err\":%u}}\n" : "\"err\":%u}\n", err);
-	return response;
-}
-
-#endif
-
 // Get information for the specified file, or the currently printing file (if 'filename' is null or empty), in JSON format
-// Return GCodeResult::Warning if the file doesn't exist, else GCodeResult::ok or GCodeResult::notFinished
+// Return GCodeResult::Wating if the file doesn't exist, else GCodeResult::ok or GCodeResult::notFinished
 GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&response, bool quitEarly) noexcept
 {
 	const bool specificFile = (filename != nullptr && filename[0] != 0);
 	GCodeFileInfo info;
 	if (specificFile)
 	{
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 		// Poll file info for a specific file
 		String<MaxFilenameLength> filePath;
-		if (!MassStorage::CombineName(filePath.GetRef(), Platform::GetGCodeDir(), filename))
+		if (!MassStorage::CombineName(filePath.GetRef(), platform->GetGCodeDir(), filename))
 		{
 			info.isValid = false;
 		}
@@ -2398,7 +2253,7 @@ GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&res
 			return GCodeResult::notFinished;
 		}
 #else
-		return GCodeResult::warning;
+		return GCodeResult::notFinished;
 #endif
 	}
 	else if (!printMonitor->GetPrintingFileInfo(info))
@@ -2413,7 +2268,7 @@ GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&res
 
 	if (info.isValid)
 	{
-		response->printf("{\"err\":0,\"fileName\":\"%.s\",\"size\":%lu,", ((specificFile) ? filename : printMonitor->GetPrintingFilename()), info.fileSize);
+		response->printf("{\"err\":0,\"size\":%lu,",info.fileSize);
 		tm timeInfo;
 		gmtime_r(&info.lastModifiedTime, &timeInfo);
 		if (timeInfo.tm_year > /*19*/80)
@@ -2422,7 +2277,8 @@ GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&res
 					timeInfo.tm_year + 1900, timeInfo.tm_mon + 1, timeInfo.tm_mday, timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
 		}
 
-		response->catf("\"height\":%.2f,\"layerHeight\":%.2f,\"numLayers\":%u,", (double)info.objectHeight, (double)info.layerHeight, info.numLayers);
+		response->catf("\"height\":%.2f,\"firstLayerHeight\":%.2f,\"layerHeight\":%.2f,",
+					(double)info.objectHeight, (double)info.firstLayerHeight, (double)info.layerHeight);
 		if (info.printTime != 0)
 		{
 			response->catf("\"printTime\":%" PRIu32 ",", info.printTime);
@@ -2446,27 +2302,11 @@ GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&res
 				ch = ',';
 			}
 		}
-		response->cat(']');
+		response->cat("]");
 
 		if (!specificFile)
 		{
-			response->catf(",\"printDuration\":%d", (int)printMonitor->GetPrintDuration());
-		}
-
-		// See if we have any thumbnails
-		if (info.thumbnails[0].IsValid())
-		{
-			response->cat(",\"thumbnails\":");
-			size_t index = 0;
-			do
-			{
-				const GCodeFileInfo::ThumbnailInfo& inf = info.thumbnails[index];
-				response->catf("%c{\"width\":%u,\"height\":%u,\"format\":\"%s\",\"offset\":%" PRIu32 ",\"size\":%" PRIu32 "}",
-								((index == 0) ? '[' : ','), inf.height, inf.width, inf.format.ToString(), inf.offset, inf.size);
-				++index;
-			}
-			while (index < MaxThumbnails && info.thumbnails[index].IsValid());
-			response->cat(']');
+			response->catf(",\"printDuration\":%d,\"fileName\":\"%.s\"", (int)printMonitor->GetPrintDuration(), printMonitor->GetPrintingFilename());
 		}
 
 		response->catf(",\"generatedBy\":\"%.s\"}\n", info.generatedBy.c_str());
@@ -2478,7 +2318,7 @@ GCodeResult RepRap::GetFileInfoResponse(const char *filename, OutputBuffer *&res
 }
 
 // Helper functions to write JSON arrays
-// Append float array using the specified number of decimal places
+// Append float array using 1 decimal place
 void RepRap::AppendFloatArray(OutputBuffer *buf, const char *name, size_t numValues, function_ref<float(size_t)> func, unsigned int numDecimalDigits) noexcept
 {
 	if (name != nullptr)
@@ -2492,8 +2332,7 @@ void RepRap::AppendFloatArray(OutputBuffer *buf, const char *name, size_t numVal
 		{
 			buf->cat(',');
 		}
-		const float fVal = HideNan(func(i));
-		buf->catf(GetFloatFormatString(fVal, numDecimalDigits), (double)fVal);
+		buf->catf(GetFloatFormatString(numDecimalDigits), HideNan(func(i)));
 	}
 	buf->cat(']');
 }
@@ -2538,7 +2377,7 @@ void RepRap::AppendStringArray(OutputBuffer *buf, const char *name, size_t numVa
 
 // Return a query into the object model, or return nullptr if no buffer available
 // We append a newline to help PanelDue resync after receiving corrupt or incomplete data. DWC ignores it.
-OutputBuffer *RepRap::GetModelResponse(const GCodeBuffer *_ecv_null gb, const char *key, const char *flags) const THROWS(GCodeException)
+OutputBuffer *RepRap::GetModelResponse(const char *key, const char *flags) const THROWS(GCodeException)
 {
 	OutputBuffer *outBuf;
 	if (OutputBuffer::Allocate(outBuf))
@@ -2556,7 +2395,7 @@ OutputBuffer *RepRap::GetModelResponse(const GCodeBuffer *_ecv_null gb, const ch
 
 		try
 		{
-			reprap.ReportAsJson(gb, outBuf, key, flags, wantArrayLength);
+			reprap.ReportAsJson(outBuf, key, flags, wantArrayLength);
 			outBuf->cat("}\n");
 			if (outBuf->HadOverflow())
 			{
@@ -2650,7 +2489,7 @@ void RepRap::ClearAlert() noexcept
 size_t RepRap::GetStatusIndex() const noexcept
 {
 	return    (processingConfig)										? 0		// Reading the configuration file
-#if HAS_SBC_INTERFACE && SUPPORT_CAN_EXPANSION
+#if HAS_LINUX_INTERFACE && SUPPORT_CAN_EXPANSION
 			: (gCodes->IsFlashing() || expansion->IsFlashing())			? 1		// Flashing a new firmware binary
 #else
 			: (gCodes->IsFlashing())									? 1		// Flashing a new firmware binary
@@ -2662,22 +2501,21 @@ size_t RepRap::GetStatusIndex() const noexcept
 			: (gCodes->GetPauseState() == PauseState::pausing)			? 4		// Pausing
 			: (gCodes->GetPauseState() == PauseState::resuming)			? 5		// Resuming
 			: (gCodes->GetPauseState() == PauseState::paused)			? 6		// Paused
-			: (gCodes->GetPauseState() == PauseState::cancelling)		? 7		// Paused
 			: (printMonitor->IsPrinting())
-			  	  ? ((gCodes->IsSimulating())							? 8		// Simulating
-			: 														  	  9		// Printing
+			  	  ? ((gCodes->IsSimulating())							? 7		// Simulating
+			: 														  	  8		// Printing
 			  	  	)
-			: (gCodes->IsDoingToolChange())								? 10	// Changing tool
+			: (gCodes->IsDoingToolChange())								? 9		// Changing tool
 			: (gCodes->DoingFileMacro() || !move->NoLiveMovement() ||
-			   gCodes->WaitingForAcknowledgement()) 					? 11	// Busy
-			:															  12;	// Idle
+			   gCodes->WaitingForAcknowledgement()) 					? 10	// Busy
+			:															  11;	// Idle
 
 }
 
 // Get the status character for the new-style status response
 char RepRap::GetStatusCharacter() const noexcept
 {
-	return "CFHODRSAMPTBI"[GetStatusIndex()];
+	return "CFHODRSMPTBI"[GetStatusIndex()];
 }
 
 const char* RepRap::GetStatusString() const noexcept
@@ -2691,7 +2529,6 @@ const char* RepRap::GetStatusString() const noexcept
 		"pausing",
 		"resuming",
 		"paused",
-		"cancelling",
 		"simulating",
 		"processing",
 		"changingTool",
@@ -2752,7 +2589,7 @@ unsigned int RepRap::GetProhibitedExtruderMovements(unsigned int extrusions, uns
 	unsigned int result = 0;
 	for (size_t driveNum = 0; driveNum < tool->DriveCount(); driveNum++)
 	{
-		const unsigned int extruderDrive = (unsigned int)(tool->GetDrive(driveNum));
+		const unsigned int extruderDrive = (unsigned int)(tool->Drive(driveNum));
 		const unsigned int mask = 1 << extruderDrive;
 		if (extrusions & mask)
 		{
@@ -2793,7 +2630,7 @@ GCodeResult RepRap::ClearTemperatureFault(int8_t wasDudHeater, const StringRef& 
 	return rslt;
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 // Save some resume information, returning true if successful
 // We assume that the tool configuration doesn't change, only the temperatures and the mix
@@ -2896,6 +2733,8 @@ bool RepRap::CheckFirmwareUpdatePrerequisites(const StringRef& reply, const Stri
 	if (!ok || firstDword !=
 #if SAME5x
 						HSRAM_ADDR + HSRAM_SIZE
+#elif SAM3XA
+						IRAM1_ADDR + IRAM1_SIZE
 #else
 						IRAM_ADDR + IRAM_SIZE
 #endif
@@ -2958,14 +2797,9 @@ void RepRap::PrepareToLoadIap() noexcept
 	// This also shuts down tasks and interrupts that might make use of the RAM that we are about to load the IAP binary into.
 	EmergencyStop();						// this also stops Platform::Tick being called, which is necessary because it access Z probe object in RAM used by IAP
 	network->Exit();						// kill the network task to stop it overwriting RAM that we use to hold the IAP
-#if HAS_SMART_DRIVERS
 	SmartDrivers::Exit();					// stop the drivers being polled via SPI or UART because it may use data in the last 64Kb of RAM
-#endif
 	FilamentMonitor::Exit();				// stop the filament monitors generating interrupts, we may be about to overwrite them
 	fansManager->Exit();					// stop the fan tachos generating interrupts, we may be about to overwrite them
-#if SUPPORT_ACCELEROMETERS
-	Accelerometers::Exit();					// terminate the accelerometer task, if any
-#endif
 	if (RTOSIface::GetCurrentTask() != Tasks::GetMainTask())
 	{
 		Tasks::TerminateMainTask();			// stop the main task if IAP is being written from another task
@@ -3034,6 +2868,8 @@ void RepRap::StartIap(const char *filename) noexcept
 		if (topOfStack + firmwareFileLocation.strlen() + 1 <=
 # if SAME5x
 						HSRAM_ADDR + HSRAM_SIZE
+# elif SAM3XA
+						IRAM1_ADDR + IRAM1_SIZE
 # else
 						IRAM_ADDR + IRAM_SIZE
 # endif

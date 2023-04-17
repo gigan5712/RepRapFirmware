@@ -39,7 +39,7 @@ bool InputMonitor::Activate(bool useInterrupt) noexcept
 #if SAME5x
 				!useInterrupt || port.SetAnalogCallback(CommonAnalogPortInterrupt, CallbackParameter(this), 1);
 #else
-				false;			// SAME70 doesn't support SetAnalogCallback yet
+				true;			// SAME70 doesn't support SetAnalogCallback yet
 #endif
 		}
 		active = true;

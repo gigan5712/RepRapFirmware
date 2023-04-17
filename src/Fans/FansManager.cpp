@@ -16,11 +16,6 @@
 # include <CanMessageFormats.h>
 #endif
 
-#if SUPPORT_REMOTE_COMMANDS
-# include <CanMessageGenericTables.h>
-# include <CanMessageGenericParser.h>
-#endif
-
 #include <utility>
 
 ReadWriteLock FansManager::fansLock;
@@ -42,7 +37,7 @@ ReadLockedPointer<Fan> FansManager::FindFan(size_t fanNum) const noexcept
 }
 
 // Create and return a local fan. if it fails, return nullptr with the error message in 'reply'.
-LocalFan *FansManager::CreateLocalFan(uint32_t fanNum, const char *_ecv_array pinNames, PwmFrequency freq, const StringRef& reply) noexcept
+LocalFan *FansManager::CreateLocalFan(uint32_t fanNum, const char *pinNames, PwmFrequency freq, const StringRef& reply) noexcept
 {
 	LocalFan *newFan = new LocalFan(fanNum);
 	if (!newFan->AssignPorts(pinNames, reply))
@@ -80,7 +75,7 @@ size_t FansManager::GetNumFansToReport() const noexcept
 	return numFans;
 }
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 
 bool FansManager::WriteFanSettings(FileStore *f) const noexcept
 {
@@ -106,7 +101,10 @@ GCodeResult FansManager::ConfigureFanPort(GCodeBuffer& gb, const StringRef& repl
 		gb.GetReducedString(pinName.GetRef());
 
 		WriteLocker lock(fansLock);
-		DeleteObject(fans[fanNum]);
+
+		Fan *oldFan = nullptr;
+		std::swap(oldFan, fans[fanNum]);
+		delete oldFan;
 
 		const PwmFrequency freq = (gb.Seen('Q')) ? gb.GetPwmFrequency() : DefaultFanPwmFreq;
 
@@ -219,7 +217,7 @@ bool FansManager::IsFanControllable(size_t fanNum) const noexcept
 }
 
 // Return the fan's name
-const char *_ecv_array FansManager::GetFanName(size_t fanNum) const noexcept
+const char *FansManager::GetFanName(size_t fanNum) const noexcept
 {
 	auto fan = FindFan(fanNum);
 	return (fan.IsNull()) ? "" : fan->GetName();
@@ -264,7 +262,9 @@ void FansManager::Exit() noexcept
 	WriteLocker lock(fansLock);
 	for (Fan*& fan : fans)
 	{
-		DeleteObject(fan);
+		Fan *f;
+		std::swap(f, fan);
+		delete f;
 	}
 }
 
@@ -285,102 +285,6 @@ void FansManager::ProcessRemoteFanRpms(CanAddress src, const CanMessageFansRepor
 		++numFansProcessed;
 		whichFans &= ~((uint64_t)1 << fanNum);
 	}
-}
-
-#endif
-
-#if SUPPORT_REMOTE_COMMANDS
-
-// This is called by M950 to create a fan or change its PWM frequency or report its port
-GCodeResult FansManager::ConfigureFanPort(const CanMessageGeneric& msg, const StringRef& reply) noexcept
-{
-	CanMessageGenericParser parser(msg, M950FanParams);
-	uint16_t fanNum;
-	if (!parser.GetUintParam('F', fanNum))
-	{
-		reply.copy("Missing F parameter");
-		return GCodeResult::error;
-	}
-
-	if (fanNum >= MaxFans)
-	{
-		reply.printf("Fan number %u too high", (unsigned int)fanNum);
-		return GCodeResult::error;
-	}
-
-	PwmFrequency freq = DefaultFanPwmFreq;
-	const bool seenFreq = parser.GetUintParam('Q', freq);
-
-	String<StringLength50> pinNames;
-	if (parser.GetStringParam('C', pinNames.GetRef()))
-	{
-		WriteLocker lock(fansLock);
-
-		Fan *oldFan = nullptr;
-		std::swap(oldFan, fans[fanNum]);
-		delete oldFan;
-
-		fans[fanNum] = CreateLocalFan(fanNum, pinNames.c_str(), freq, reply);
-		return (fans[fanNum] == nullptr) ? GCodeResult::error : GCodeResult::ok;
-	}
-
-	const auto fan = FindFan(fanNum);
-	if (fan.IsNull())
-	{
-		reply.printf("Board %u doesn't have fan %u", CanInterface::GetCanAddress(), fanNum);
-		return GCodeResult::error;
-	}
-
-	return (seenFreq) ? fan->SetPwmFrequency(freq, reply) : fan->ReportPortDetails(reply);
-}
-
-// Set or report the parameters for the specified fan
-// If 'mCode' is an M-code used to set parameters for the current kinematics (which should only ever be 106 or 107)
-// then search for parameters used to configure the fan. If any are found, perform appropriate actions and return true.
-// If errors were discovered while processing parameters, put an appropriate error message in 'reply' and set 'error' to true.
-// If no relevant parameters are found, print the existing ones to 'reply' and return false.
-GCodeResult FansManager::ConfigureFan(const CanMessageFanParameters& msg, const StringRef& reply) noexcept
-{
-	auto fan = FindFan(msg.fanNumber);
-	if (fan.IsNull())
-	{
-		reply.printf("Board %u doesn't have fan %u", CanInterface::GetCanAddress(), msg.fanNumber);
-		return GCodeResult::error;
-	}
-
-	return fan->Configure(msg, reply);
-}
-
-GCodeResult FansManager::SetFanSpeed(const CanMessageSetFanSpeed& msg, const StringRef& reply) noexcept
-{
-	auto fan = FindFan(msg.fanNumber);
-	if (fan.IsNull())
-	{
-		reply.printf("Board %u doesn't have fan %u", CanInterface::GetCanAddress(), msg.fanNumber);
-		return GCodeResult::error;
-	}
-
-	return fan->SetPwm(msg.pwm, reply);
-}
-
-// Construct a fan RPM report message. Returns the number of fans reported in it.
-unsigned int FansManager::PopulateFansReport(CanMessageFansReport& msg) noexcept
-{
-	ReadLocker locker(fansLock);
-
-	msg.whichFans = 0;
-	unsigned int numReported = 0;
-	for (Fan* f : fans)
-	{
-		if (f != nullptr && f->IsLocal())
-		{
-			msg.fanReports[numReported].actualPwm = (uint16_t)(f->GetPwm() * 65535);
-			msg.fanReports[numReported].rpm = f->GetRPM();
-			msg.whichFans |= (uint64_t)1 << f->GetNumber();
-			++numReported;
-		}
-	}
-	return numReported;
 }
 
 #endif

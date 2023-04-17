@@ -126,9 +126,9 @@ public:
  	const char *GetLatestMessage(uint16_t& sequence) const noexcept;
  	const MessageBox& GetMessageBox() const noexcept { return mbox; }
 #endif
-#if HAS_SBC_INTERFACE
- 	bool UsingSbcInterface() const noexcept { return usingSbcInterface; }
- 	SbcInterface& GetSbcInterface() const noexcept { return *sbcInterface; }
+#if HAS_LINUX_INTERFACE
+ 	bool UsingLinuxInterface() const noexcept { return usingLinuxInterface; }
+ 	LinuxInterface& GetLinuxInterface() const noexcept { return *linuxInterface; }
 #endif
 #if SUPPORT_CAN_EXPANSION
  	ExpansionManager& GetExpansion() const noexcept { return *expansion; }
@@ -145,16 +145,15 @@ public:
 	OutputBuffer *GetConfigResponse() noexcept;
 	OutputBuffer *GetLegacyStatusResponse(uint8_t type, int seq) const noexcept;
 
-#if HAS_MASS_STORAGE || HAS_EMBEDDED_FILES
+#if HAS_MASS_STORAGE
 	OutputBuffer *GetFilesResponse(const char* dir, unsigned int startAt, bool flagsDirs) noexcept;
 	OutputBuffer *GetFilelistResponse(const char* dir, unsigned int startAt) noexcept;
-	OutputBuffer *GetThumbnailResponse(const char *filename, FilePosition offset, bool forM31point1) noexcept;
 #endif
 
 	GCodeResult GetFileInfoResponse(const char *filename, OutputBuffer *&response, bool quitEarly) noexcept;
 
 #if SUPPORT_OBJECT_MODEL
-	OutputBuffer *GetModelResponse(const GCodeBuffer *_ecv_null gb, const char *key, const char *flags) const THROWS(GCodeException);
+	OutputBuffer *GetModelResponse(const char *key, const char *flags) const THROWS(GCodeException);
 #endif
 
 	void Beep(unsigned int freq, unsigned int ms) noexcept;
@@ -162,7 +161,7 @@ public:
 	void SetAlert(const char *msg, const char *title, int mode, float timeout, AxesBitmap controls) noexcept;
 	void ClearAlert() noexcept;
 
-#if HAS_MASS_STORAGE || HAS_SBC_INTERFACE
+#if HAS_MASS_STORAGE
 	bool WriteToolSettings(FileStore *f) noexcept;						// save some information for the resume file
 	bool WriteToolParameters(FileStore *f, const bool forceWriteOffsets) noexcept;	// save some information in config-override.g
 #endif
@@ -249,8 +248,8 @@ private:
  	Display *display;
 #endif
 
-#if HAS_SBC_INTERFACE
- 	SbcInterface *sbcInterface;
+#if HAS_LINUX_INTERFACE
+ 	LinuxInterface *linuxInterface;
 #endif
 
 #if SUPPORT_ROLAND
@@ -263,7 +262,7 @@ private:
 
  	mutable Mutex messageBoxMutex;				// mutable so that we can lock and release it in const functions
 
-	uint16_t boardsSeq, directoriesSeq, fansSeq, heatSeq, inputsSeq, jobSeq, moveSeq, globalSeq;
+	uint16_t boardsSeq, directoriesSeq, fansSeq, heatSeq, inputsSeq, jobSeq, moveSeq, globalSeq;;
 	uint16_t networkSeq, scannerSeq, sensorsSeq, spindlesSeq, stateSeq, toolsSeq, volumesSeq;
 
 	GlobalVariables globalVariables;
@@ -305,8 +304,8 @@ private:
 	bool stopped;
 	bool active;
 	bool processingConfig;
-#if HAS_SBC_INTERFACE
- 	bool usingSbcInterface;
+#if HAS_LINUX_INTERFACE
+ 	bool usingLinuxInterface;
 #endif
 };
 
